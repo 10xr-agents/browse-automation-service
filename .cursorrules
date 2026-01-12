@@ -1,0 +1,407 @@
+# Cursor Rules for Browser Automation Service
+
+This file provides development guidelines and best practices for working with the Browser Automation Service codebase.
+
+## Code Organization Philosophy
+
+### Core Principle: Separation of Concerns
+
+We maintain a **clear distinction** between:
+1. **Browser-Use Core Code** (`browser_use/` directory) - Original Browser-Use library
+2. **Our Extensions** (`mvp/` directory) - Our custom code for Browser Automation Service
+
+This separation enables:
+- **Easy Browser-Use Upgrades**: Can upgrade Browser-Use code independently
+- **Clear Boundaries**: Know what's ours vs what's upstream
+- **Maintainability**: Easier to track changes and contributions
+- **Performance**: Direct source access while maintaining upgrade path
+
+---
+
+## Code Separation Guidelines
+
+### 1. Directory Structure
+
+```
+/
+├── browser_use/          # Browser-Use core library (upstream code)
+│   ├── browser/
+│   ├── agent/
+│   ├── tools/
+│   └── ...
+│
+├── mvp/                  # Our extensions (custom code)
+│   ├── action_command.py
+│   ├── action_dispatcher.py
+│   ├── browser_session_manager.py
+│   ├── livekit_service.py
+│   ├── mcp_server.py
+│   └── ...
+│
+└── dev-docs/             # Our documentation
+```
+
+### 2. Import Patterns
+
+**✅ DO: Import from Browser-Use**
+```python
+# In mvp/ files, import from browser_use
+from browser_use import BrowserSession
+from browser_use.browser.profile import BrowserProfile
+from browser_use.browser.events import NavigateToUrlEvent
+from browser_use.tools.service import Tools
+```
+
+**❌ DON'T: Modify Browser-Use imports directly in our code**
+```python
+# Don't do this - keep browser_use/ code unchanged
+from browser_use.browser.session import BrowserSession
+# Then modify BrowserSession in place
+```
+
+### 3. Extending vs Modifying Browser-Use
+
+**✅ DO: Extend Browser-Use Components**
+- Create wrapper classes in `mvp/` that use Browser-Use components
+- Add new functionality in `mvp/` that imports and uses Browser-Use
+- Example: `ActionDispatcher` wraps `BrowserSession` and adds action command handling
+
+**✅ DO: Use Browser-Use APIs**
+- Use public APIs (BrowserSession, BrowserProfile, Tools, etc.)
+- Follow Browser-Use patterns and conventions
+- Leverage event-driven architecture
+
+**⚠️ AVOID: Direct Modifications to Browser-Use**
+- Avoid modifying `browser_use/` code directly unless absolutely necessary
+- If modification is needed, document it clearly and consider upstream contribution
+- Prefer extending/wrapping over modifying
+
+**❌ DON'T: Mix Our Code into Browser-Use**
+- Don't put our code in `browser_use/` directory
+- Don't modify Browser-Use core files without clear justification
+- Keep `browser_use/` as clean upstream code
+
+---
+
+## Browser-Use Upgrade Strategy
+
+### When Upgrading Browser-Use
+
+1. **Identify Upgrade Source**
+   - Check Browser-Use repository for new versions
+   - Review changelog for breaking changes
+   - Identify new features/APIs we can use
+
+2. **Prepare for Upgrade**
+   - **Backup Current State**: Commit all changes to `mvp/` and `dev-docs/`
+   - **Check Dependencies**: Review `pyproject.toml` for version constraints
+   - **Review Breaking Changes**: Check Browser-Use migration guides
+
+3. **Upgrade Process**
+   - **Option A: Git Merge/Rebase** (if forked from Browser-Use)
+     ```bash
+     git remote add upstream https://github.com/browser-use/browser-use.git
+     git fetch upstream
+     git merge upstream/main  # or rebase
+     ```
+   
+   - **Option B: Replace browser_use/ Directory**
+     ```bash
+     # Backup current browser_use/
+     cp -r browser_use/ browser_use.backup/
+     
+     # Replace with new version (from PyPI source or git clone)
+     # Then restore any custom modifications if needed
+     ```
+
+4. **Post-Upgrade Validation**
+   - Run tests: `uv run pytest tests/ci/`
+   - Test MVP functionality: `uv run python mvp/validate_mvp.py`
+   - Check imports: Verify all `mvp/` imports still work
+   - Review breaking changes: Update `mvp/` code if APIs changed
+
+5. **Document Changes**
+   - Update `dev-docs/ARCHITECTURE.md` if Browser-Use structure changed
+   - Document any required changes to `mvp/` code
+   - Update version constraints in `pyproject.toml`
+
+### Tracking Browser-Use Modifications
+
+If we **must** modify Browser-Use code:
+
+1. **Document in CHANGELOG.md**
+   ```markdown
+   ## Browser-Use Modifications
+   
+   ### browser_use/browser/session.py
+   - Modified: Line 123 - Added custom timeout handling
+   - Reason: Required for 6-hour session timeout
+   - Impact: Breaks upgrade compatibility
+   ```
+
+2. **Use Git Branches/Patches**
+   - Create branch: `browser-use-modified`
+   - Keep modifications minimal and documented
+   - Consider upstream contribution for generic changes
+
+3. **Version Pinning**
+   - Pin Browser-Use version in `pyproject.toml` if modifications break upgrade path
+   - Document why upgrade is blocked
+
+---
+
+## Development Best Practices
+
+### 1. Code Style
+
+Follow Browser-Use conventions (as defined in `CLAUDE.md`):
+
+- **Indentation**: Use **tabs** (not spaces) for Python code
+- **Type Hints**: Use modern Python 3.12+ typing (`str | None` not `Optional[str]`)
+- **Async**: Use `async`/`await` throughout
+- **Pydantic**: Use Pydantic v2 models for data structures
+- **Logging**: Use `logger = logging.getLogger(__name__)` pattern
+
+### 2. File Organization
+
+**Our Code (`mvp/`):**
+- Keep related functionality together
+- Use descriptive file names
+- Follow single-responsibility principle
+- Document public APIs
+
+**Browser-Use Code (`browser_use/`):**
+- Don't modify unless necessary
+- If modifying, document why
+- Keep modifications minimal
+
+### 3. Testing
+
+- **Our Tests**: Put tests for `mvp/` code in `tests/ci/` with prefix `test_mvp_*`
+- **Integration Tests**: Test `mvp/` + `browser_use/` integration
+- **Validation Scripts**: Use `mvp/validate_mvp.py` for MVP validation
+
+### 4. Documentation
+
+- **Our Docs**: Put in `dev-docs/` directory
+- **Architecture**: Document in `dev-docs/ARCHITECTURE.md`
+- **Protocol**: Document in `dev-docs/AGENT_BROWSER_COORDINATION.md`
+- **Implementation**: Document in `dev-docs/IMPLEMENTATION_GUIDE.md`
+
+### 5. Dependencies
+
+- **Browser-Use Dependencies**: Manage in `pyproject.toml` (inherited)
+- **Our Dependencies**: Add to `pyproject.toml` under `[project.dependencies]`
+- **Version Management**: Use `uv` for dependency management (not `pip`)
+
+### 6. Import Organization
+
+**In `mvp/` files:**
+```python
+# Standard library
+import asyncio
+import logging
+from typing import Any
+
+# Third-party
+from browser_use import BrowserSession  # Browser-Use imports
+from browser_use.browser.profile import BrowserProfile
+
+# Our code
+from mvp.action_command import ActionCommand, ActionType
+from mvp.action_dispatcher import ActionDispatcher
+```
+
+### 7. Error Handling
+
+- Use Browser-Use exception types when appropriate
+- Create custom exceptions in `mvp/` if needed
+- Document error scenarios
+
+### 8. Logging
+
+- Use structured logging with levels (DEBUG, INFO, WARNING, ERROR)
+- Log at appropriate levels:
+  - DEBUG: Detailed execution flow
+  - INFO: Important state changes
+  - WARNING: Recoverable issues
+  - ERROR: Failures requiring attention
+
+---
+
+## Common Patterns
+
+### Pattern 1: Wrapper Class
+
+```python
+# mvp/browser_session_manager.py
+from browser_use import BrowserSession
+from browser_use.browser.profile import BrowserProfile
+
+class BrowserSessionManager:
+    """Wrapper around BrowserSession with our custom logic."""
+    
+    def __init__(self):
+        self.sessions: dict[str, BrowserSession] = {}
+    
+    async def start_session(self, room_name: str, **kwargs):
+        # Use BrowserSession, don't modify it
+        browser_session = BrowserSession(**kwargs)
+        await browser_session.start()
+        self.sessions[room_name] = browser_session
+```
+
+### Pattern 2: Event Handler Extension
+
+```python
+# mvp/action_dispatcher.py
+from browser_use import BrowserSession
+from browser_use.browser.events import ClickElementEvent
+
+class ActionDispatcher:
+    """Dispatches actions using Browser-Use events."""
+    
+    def __init__(self, browser_session: BrowserSession):
+        self.browser_session = browser_session  # Use, don't modify
+    
+    async def execute_click(self, index: int):
+        # Use Browser-Use events
+        event = self.browser_session.event_bus.dispatch(
+            ClickElementEvent(index=index)
+        )
+        await event
+```
+
+### Pattern 3: Service Composition
+
+```python
+# mvp/mcp_server.py
+from browser_use import BrowserSession
+from mvp.browser_session_manager import BrowserSessionManager
+from mvp.action_dispatcher import ActionDispatcher
+
+class BrowserAutomationMCPServer:
+    """Composes our services with Browser-Use."""
+    
+    def __init__(self):
+        # Our services
+        self.session_manager = BrowserSessionManager()
+        # Uses BrowserSession internally
+```
+
+---
+
+## Git Workflow
+
+### Branching Strategy
+
+- **main**: Stable code with working MVP
+- **feature/***: New features in `mvp/`
+- **browser-use-upgrade**: Browser-Use upgrades
+- **browser-use-modified**: If we modify Browser-Use code
+
+### Commit Messages
+
+Follow conventional commits:
+```
+feat(mvp): Add presentation flow manager
+fix(mvp): Fix action dispatcher timeout handling
+docs(dev-docs): Update architecture documentation
+upgrade(browser-use): Upgrade to Browser-Use v0.12.0
+```
+
+### Before Committing
+
+1. ✅ Run tests: `uv run pytest tests/ci/`
+2. ✅ Run validation: `uv run python mvp/validate_mvp.py`
+3. ✅ Check code style: `uv run ruff check --fix`
+4. ✅ Check types: `uv run pyright`
+5. ✅ Verify imports: All `mvp/` imports from `browser_use/` work
+6. ✅ Review changes: No accidental modifications to `browser_use/`
+
+---
+
+## When to Modify Browser-Use vs Extend
+
+### ✅ Extend (Preferred)
+
+- Adding new functionality
+- Customizing behavior
+- Adding new actions/events
+- Integrating with external services (LiveKit, MCP)
+
+### ⚠️ Modify (Only When Necessary)
+
+- Performance optimizations specific to our use case
+- Bug fixes that can't wait for upstream
+- Critical features not available upstream
+
+### ❌ Don't Modify
+
+- Standard functionality that works fine
+- Code that's actively maintained upstream
+- Features that could be contributed upstream
+
+---
+
+## Quick Reference
+
+### Common Commands
+
+```bash
+# Run tests
+uv run pytest tests/ci/
+
+# Validate MVP
+uv run python mvp/validate_mvp.py
+
+# Check code style
+uv run ruff check --fix
+uv run ruff format
+
+# Check types
+uv run pyright
+
+# Start server
+uv run python mvp/start_server.py
+
+# Install dependencies
+uv sync
+```
+
+### Important Files
+
+- **Our Code**: `mvp/*.py`
+- **Browser-Use Code**: `browser_use/*.py`
+- **Our Docs**: `dev-docs/*.md`
+- **Dependencies**: `pyproject.toml`
+- **Configuration**: `.env` (not committed)
+
+### Key Principles
+
+1. ✅ Keep `mvp/` and `browser_use/` separate
+2. ✅ Extend, don't modify Browser-Use when possible
+3. ✅ Document Browser-Use modifications if needed
+4. ✅ Test after Browser-Use upgrades
+5. ✅ Use Browser-Use APIs, don't hack internals
+6. ✅ Follow Browser-Use code style conventions
+7. ✅ Keep upgrade path clear
+
+---
+
+## Summary
+
+**Core Philosophy**: 
+- **Browser-Use** (`browser_use/`) = Upstream library code (keep clean, upgradeable)
+- **Our Extensions** (`mvp/`) = Our custom code (full control, our responsibility)
+
+**Key Rule**: 
+> Prefer extending Browser-Use in `mvp/` over modifying `browser_use/` directly. Only modify `browser_use/` when absolutely necessary, and document it clearly.
+
+**Upgrade Path**: 
+> Keep `browser_use/` code clean and upgradeable. When upgrading, validate all `mvp/` code still works with new Browser-Use version.
+
+---
+
+*Last Updated: 2025*
+*Version: 1.0.0*
