@@ -50,6 +50,8 @@ class StartExplorationRequest(BaseModel):
 	max_depth: int = Field(3, description="Maximum exploration depth")
 	strategy: str = Field("BFS", description="Exploration strategy: BFS or DFS")
 	job_id: str | None = Field(None, description="Optional job ID (auto-generated if not provided)")
+	include_paths: list[str] | None = Field(None, description="Path patterns to include (e.g., ['/docs/*', '/api/v1/*'])")
+	exclude_paths: list[str] | None = Field(None, description="Path patterns to exclude (e.g., ['/admin/*', '/api/*'])")
 
 
 class JobStatusResponse(BaseModel):
@@ -64,11 +66,16 @@ class JobStatusResponse(BaseModel):
 	links_discovered: int = 0
 	external_links_detected: int = 0
 	error: str | None = None
+	# Enhanced metrics
+	estimated_time_remaining: float | None = None  # seconds
+	processing_rate: float | None = None  # pages per minute
+	recent_pages: list[dict[str, Any]] | None = None  # Recent completed pages with titles
 
 
 class JobControlRequest(BaseModel):
 	"""Request model for job control (pause/resume/cancel)."""
 	job_id: str = Field(..., description="Job ID to control")
+	wait_for_current_page: bool = Field(False, description="For cancel: wait for current page to complete before cancelling")
 
 
 def create_knowledge_router(
@@ -120,6 +127,8 @@ def create_knowledge_router(
 						max_depth=request.max_depth,
 						strategy=request.strategy,
 						job_id=job_id,
+						include_paths=request.include_paths,
+						exclude_paths=request.exclude_paths,
 					)
 					
 					# Store in registry for status tracking
@@ -156,6 +165,11 @@ def create_knowledge_router(
 					pipeline = await async_create()
 				else:
 					pipeline = async_create
+			
+			# Configure pipeline with path restrictions
+			if request.include_paths or request.exclude_paths:
+				pipeline.include_paths = request.include_paths or []
+				pipeline.exclude_paths = request.exclude_paths or []
 			
 			# Store job in registry
 			_job_registry[job_id] = {
@@ -226,15 +240,33 @@ def create_knowledge_router(
 				status = pipeline.get_job_status()
 				# Get results if available
 				results = job.get('results', {})
+				
+				# Calculate enhanced metrics
+				pages_completed = results.get('pages_stored', 0)
+				pages_queued = max(0, results.get('pages_processed', 0) - pages_completed)
+				processing_times = pipeline.page_processing_times
+				
+				estimated_time = pipeline._calculate_estimated_time_remaining(
+					pages_completed=pages_completed,
+					pages_queued=pages_queued,
+					processing_times=processing_times,
+				)
+				processing_rate = pipeline._calculate_processing_rate(processing_times)
+				
 				return JSONResponse({
 					'job_id': job_id,
 					'status': status.get('status', job.get('status', 'unknown')),
 					'paused': status.get('paused', False),
-					'pages_completed': results.get('pages_stored', 0),
-					'pages_queued': results.get('pages_processed', 0) - results.get('pages_stored', 0),
+					'current_page': results.get('current_page'),
+					'pages_completed': pages_completed,
+					'pages_queued': pages_queued,
 					'pages_failed': results.get('pages_failed', 0),
+					'links_discovered': results.get('links_discovered', 0),
 					'external_links_detected': results.get('external_links_detected', 0),
 					'error': results.get('error'),
+					'estimated_time_remaining': estimated_time,
+					'processing_rate': processing_rate,
+					'recent_pages': pipeline.recent_completed_pages.copy() if pipeline.recent_completed_pages else None,
 				})
 			else:
 				return JSONResponse({
@@ -308,6 +340,7 @@ def create_knowledge_router(
 		Cancel a knowledge retrieval job.
 		
 		Job cannot be resumed after cancellation.
+		If wait_for_current_page is True, waits for current page to complete before cancelling.
 		"""
 		try:
 			job = _job_registry.get(request.job_id)
@@ -316,10 +349,22 @@ def create_knowledge_router(
 			
 			pipeline: KnowledgePipeline | None = job.get('pipeline')
 			if pipeline:
-				success = pipeline.cancel_job()
+				success = pipeline.cancel_job(wait_for_current_page=request.wait_for_current_page)
 				if success:
-					job['status'] = 'cancelled'
-					return JSONResponse({'job_id': request.job_id, 'status': 'cancelled'})
+					if request.wait_for_current_page:
+						job['status'] = 'cancelling'
+						return JSONResponse({
+							'job_id': request.job_id,
+							'status': 'cancelling',
+							'message': 'Job will be cancelled after current page completes',
+						})
+					else:
+						job['status'] = 'cancelled'
+						return JSONResponse({
+							'job_id': request.job_id,
+							'status': 'cancelled',
+							'message': 'Job cancelled immediately',
+						})
 			
 			job['status'] = 'cancelled'
 			return JSONResponse({'job_id': request.job_id, 'status': 'cancelled'})
@@ -347,14 +392,24 @@ def create_knowledge_router(
 				raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 			
 			status = job.get('status', 'unknown')
-			if status not in ('completed', 'failed', 'cancelled') and not partial:
+			if status not in ('completed', 'failed', 'cancelled', 'cancelling') and not partial:
 				raise HTTPException(
 					status_code=400,
 					detail=f"Job {job_id} is still {status}. Use partial=true to get partial results."
 				)
 			
 			results = job.get('results', {})
-			return JSONResponse(results)
+			
+			# Enhance results with metadata if available
+			enhanced_results = results.copy()
+			if 'website_metadata' in results:
+				enhanced_results['metadata'] = results['website_metadata']
+			
+			# Include error categorization in errors list
+			if 'errors' in results:
+				enhanced_results['errors'] = results['errors']  # Already includes error_type from pipeline
+			
+			return JSONResponse(enhanced_results)
 		except HTTPException:
 			raise
 		except Exception as e:

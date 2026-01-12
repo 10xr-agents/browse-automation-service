@@ -70,6 +70,8 @@ async def add_exploration_job(
 	max_depth: int = 3,
 	strategy: str = "BFS",
 	job_id: str | None = None,
+	include_paths: list[str] | None = None,
+	exclude_paths: list[str] | None = None,
 ) -> str:
 	"""
 	Add a knowledge retrieval job to the queue.
@@ -93,13 +95,15 @@ async def add_exploration_job(
 	if queue is None:
 		raise RuntimeError("BullMQ queue not available. Install bullmq and redis.")
 	
-	job_data = {
-		'start_url': start_url,
-		'max_pages': max_pages,
-		'max_depth': max_depth,
-		'strategy': strategy,
-		'job_id': job_id,
-	}
+		job_data = {
+			'start_url': start_url,
+			'max_pages': max_pages,
+			'max_depth': max_depth,
+			'strategy': strategy,
+			'job_id': job_id,
+			'include_paths': include_paths,
+			'exclude_paths': exclude_paths,
+		}
 	
 	job = await queue.add(f"explore-{job_id}", job_data, {
 		'jobId': job_id,
@@ -138,26 +142,33 @@ async def start_knowledge_worker(
 	
 	async def process_job(job: Job):
 		"""Process a knowledge retrieval job."""
-		job_data = job.data
-		job_id = job_data.get('job_id') or job.id
-		start_url = job_data.get('start_url')
-		max_pages = job_data.get('max_pages')
-		max_depth = job_data.get('max_depth', 3)
-		strategy_str = job_data.get('strategy', 'BFS')
-		
-		logger.info(f"Processing knowledge retrieval job: {job_id}")
-		
 		try:
+			job_data = job.data
+			job_id = job_data.get('job_id') or job.id
+			start_url = job_data.get('start_url')
+			max_pages = job_data.get('max_pages')
+			max_depth = job_data.get('max_depth', 3)
+			strategy_str = job_data.get('strategy', 'BFS')
+			include_paths = job_data.get('include_paths')
+			exclude_paths = job_data.get('exclude_paths')
+			
+			logger.info(f"Processing knowledge retrieval job: {job_id}")
+			
 			# Create pipeline
 			pipeline = pipeline_factory()
 			
 			# Map strategy string to enum
-			from navigator.knowledge.pipeline import ExplorationStrategy
+			from navigator.knowledge.exploration_engine import ExplorationStrategy
 			strategy = ExplorationStrategy.BFS if strategy_str.upper() == 'BFS' else ExplorationStrategy.DFS
 			
 			# Update pipeline strategy if needed
 			pipeline.exploration_engine.strategy = strategy
 			pipeline.exploration_engine.max_depth = max_depth
+			
+			# Configure path restrictions
+			if include_paths or exclude_paths:
+				pipeline.include_paths = include_paths or []
+				pipeline.exclude_paths = exclude_paths or []
 			
 			# Run exploration
 			result = await pipeline.explore_and_store(

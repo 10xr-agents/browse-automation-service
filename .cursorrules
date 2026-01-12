@@ -7,8 +7,8 @@ This file provides development guidelines and best practices for working with th
 ### Core Principle: Separation of Concerns
 
 We maintain a **clear distinction** between:
-1. **Browser-Use Core Code** (`browser_use/` directory) - Original Browser-Use library
-2. **Our Extensions** (`mvp/` directory) - Our custom code for Browser Automation Service
+1. **Browser-Use Core Code** (`browser_use/` directory) - Original Browser-Use library (embedded source)
+2. **Our Extensions** (`navigator/` directory) - Our custom code for Browser Automation Service
 
 This separation enables:
 - **Easy Browser-Use Upgrades**: Can upgrade Browser-Use code independently
@@ -30,12 +30,13 @@ This separation enables:
 │   ├── tools/
 │   └── ...
 │
-├── mvp/                  # Our extensions (custom code)
-│   ├── action_command.py
-│   ├── action_dispatcher.py
-│   ├── browser_session_manager.py
-│   ├── livekit_service.py
-│   ├── mcp_server.py
+├── navigator/            # Our extensions (custom code)
+│   ├── action/           # Action command system
+│   ├── session/          # Session management
+│   ├── streaming/        # LiveKit streaming
+│   ├── server/           # MCP and WebSocket servers
+│   ├── knowledge/        # Knowledge retrieval flow
+│   ├── presentation/     # Presentation flow management
 │   └── ...
 │
 └── dev-docs/             # Our documentation
@@ -45,7 +46,7 @@ This separation enables:
 
 **✅ DO: Import from Browser-Use**
 ```python
-# In mvp/ files, import from browser_use
+# In navigator/ files, import from browser_use
 from browser_use import BrowserSession
 from browser_use.browser.profile import BrowserProfile
 from browser_use.browser.events import NavigateToUrlEvent
@@ -62,8 +63,8 @@ from browser_use.browser.session import BrowserSession
 ### 3. Extending vs Modifying Browser-Use
 
 **✅ DO: Extend Browser-Use Components**
-- Create wrapper classes in `mvp/` that use Browser-Use components
-- Add new functionality in `mvp/` that imports and uses Browser-Use
+- Create wrapper classes in `navigator/` that use Browser-Use components
+- Add new functionality in `navigator/` that imports and uses Browser-Use
 - Example: `ActionDispatcher` wraps `BrowserSession` and adds action command handling
 
 **✅ DO: Use Browser-Use APIs**
@@ -93,9 +94,10 @@ from browser_use.browser.session import BrowserSession
    - Identify new features/APIs we can use
 
 2. **Prepare for Upgrade**
-   - **Backup Current State**: Commit all changes to `mvp/` and `dev-docs/`
+   - **Backup Current State**: Commit all changes to `navigator/` and `dev-docs/`
    - **Check Dependencies**: Review `pyproject.toml` for version constraints
    - **Review Breaking Changes**: Check Browser-Use migration guides
+   - **Document Custom Modifications**: List any changes made to `browser_use/` code
 
 3. **Upgrade Process**
    - **Option A: Git Merge/Rebase** (if forked from Browser-Use)
@@ -116,14 +118,16 @@ from browser_use.browser.session import BrowserSession
 
 4. **Post-Upgrade Validation**
    - Run tests: `uv run pytest tests/ci/`
-   - Test MVP functionality: `uv run python mvp/validate_mvp.py`
-   - Check imports: Verify all `mvp/` imports still work
-   - Review breaking changes: Update `mvp/` code if APIs changed
+   - Test navigator functionality: `uv run python navigator/tests/validate_mvp.py`
+   - Check imports: Verify all `navigator/` imports from `browser_use/` still work
+   - Review breaking changes: Update `navigator/` code if Browser-Use APIs changed
+   - Verify no regressions: Test all major flows (presentation, knowledge retrieval)
 
 5. **Document Changes**
-   - Update `dev-docs/ARCHITECTURE.md` if Browser-Use structure changed
-   - Document any required changes to `mvp/` code
-   - Update version constraints in `pyproject.toml`
+   - Update `dev-docs/COMPLETE_ARCHITECTURE.md` if Browser-Use structure changed
+   - Document any required changes to `navigator/` code
+   - Update version in `pyproject.toml` to reflect new Browser-Use version
+   - Create upgrade notes in `dev-docs/` documenting breaking changes and migration steps
 
 ### Tracking Browser-Use Modifications
 
@@ -148,6 +152,103 @@ If we **must** modify Browser-Use code:
    - Pin Browser-Use version in `pyproject.toml` if modifications break upgrade path
    - Document why upgrade is blocked
 
+### Detailed Upgrade Process
+
+#### Step-by-Step Upgrade Guide
+
+**1. Pre-Upgrade Checklist**
+```bash
+# Ensure clean working directory
+git status  # Should be clean or all changes committed
+
+# Create backup branch
+git checkout -b backup-before-browser-use-upgrade
+git push origin backup-before-browser-use-upgrade
+
+# Document current version
+echo "Current Browser-Use version: $(grep '^version =' pyproject.toml)"
+```
+
+**2. Identify Target Version**
+- Check Browser-Use releases: https://github.com/browser-use/browser-use/releases
+- Review changelog for breaking changes
+- Identify new features that could benefit our codebase
+
+**3. Choose Upgrade Method**
+
+**Method A: Git Merge (Recommended if forked from Browser-Use)**
+```bash
+# Add upstream remote if not already added
+git remote add upstream https://github.com/browser-use/browser-use.git || true
+git fetch upstream
+
+# Create upgrade branch
+git checkout -b browser-use-upgrade-v0.12.0
+
+# Merge upstream changes
+git merge upstream/main  # or specific version tag
+
+# Resolve conflicts if any
+# Test thoroughly before merging to main
+```
+
+**Method B: Directory Replacement (If not forked)**
+```bash
+# Create upgrade branch
+git checkout -b browser-use-upgrade-v0.12.0
+
+# Backup current browser_use/
+cp -r browser_use/ browser_use.backup/
+
+# Clone new version
+git clone --depth 1 --branch v0.12.0 https://github.com/browser-use/browser-use.git browser_use_new
+
+# Replace directory
+rm -rf browser_use/
+mv browser_use_new/browser_use/ browser_use/
+
+# Restore any custom modifications from backup
+# (Compare and merge manually)
+```
+
+**4. Post-Upgrade Steps**
+```bash
+# Update dependencies
+uv sync
+
+# Run tests
+uv run pytest tests/ci/ -v
+
+# Check for import errors
+uv run python -c "from navigator.server.mcp import BrowserAutomationMCPServer; print('✅ Imports OK')"
+
+# Run validation
+uv run python navigator/tests/validate_mvp.py
+
+# Check for type errors
+uv run pyright navigator/
+
+# Update version in pyproject.toml
+# Update any breaking changes in navigator/ code
+```
+
+**5. Document Upgrade**
+- Create `dev-docs/UPGRADE_NOTES_v0.12.0.md` with:
+  - Breaking changes encountered
+  - Code changes required in `navigator/`
+  - New features available
+  - Performance improvements
+  - Known issues
+
+**6. Testing Checklist**
+- [ ] All existing tests pass
+- [ ] Navigator imports work correctly
+- [ ] Presentation flow works
+- [ ] Knowledge retrieval flow works
+- [ ] MCP server starts without errors
+- [ ] LiveKit streaming works
+- [ ] No regressions in functionality
+
 ---
 
 ## Development Best Practices
@@ -164,11 +265,12 @@ Follow Browser-Use conventions (as defined in `CLAUDE.md`):
 
 ### 2. File Organization
 
-**Our Code (`mvp/`):**
+**Our Code (`navigator/`):**
 - Keep related functionality together
 - Use descriptive file names
 - Follow single-responsibility principle
 - Document public APIs
+- Organize by feature area (action, session, streaming, knowledge, etc.)
 
 **Browser-Use Code (`browser_use/`):**
 - Don't modify unless necessary
@@ -177,9 +279,9 @@ Follow Browser-Use conventions (as defined in `CLAUDE.md`):
 
 ### 3. Testing
 
-- **Our Tests**: Put tests for `mvp/` code in `tests/ci/` with prefix `test_mvp_*`
-- **Integration Tests**: Test `mvp/` + `browser_use/` integration
-- **Validation Scripts**: Use `mvp/validate_mvp.py` for MVP validation
+- **Our Tests**: Put tests for `navigator/` code in `tests/ci/` with prefix `test_navigator_*`
+- **Integration Tests**: Test `navigator/` + `browser_use/` integration
+- **Validation Scripts**: Use `navigator/tests/validate_mvp.py` for validation
 
 ### 4. Documentation
 
@@ -196,7 +298,7 @@ Follow Browser-Use conventions (as defined in `CLAUDE.md`):
 
 ### 6. Import Organization
 
-**In `mvp/` files:**
+**In `navigator/` files:**
 ```python
 # Standard library
 import asyncio
@@ -208,14 +310,14 @@ from browser_use import BrowserSession  # Browser-Use imports
 from browser_use.browser.profile import BrowserProfile
 
 # Our code
-from mvp.action_command import ActionCommand, ActionType
-from mvp.action_dispatcher import ActionDispatcher
+from navigator.action.command import ActionCommand, ActionType
+from navigator.action.dispatcher import ActionDispatcher
 ```
 
 ### 7. Error Handling
 
 - Use Browser-Use exception types when appropriate
-- Create custom exceptions in `mvp/` if needed
+- Create custom exceptions in `navigator/` if needed
 - Document error scenarios
 
 ### 8. Logging
@@ -234,7 +336,7 @@ from mvp.action_dispatcher import ActionDispatcher
 ### Pattern 1: Wrapper Class
 
 ```python
-# mvp/browser_session_manager.py
+# navigator/session/manager.py
 from browser_use import BrowserSession
 from browser_use.browser.profile import BrowserProfile
 
@@ -254,7 +356,7 @@ class BrowserSessionManager:
 ### Pattern 2: Event Handler Extension
 
 ```python
-# mvp/action_dispatcher.py
+# navigator/action/dispatcher.py
 from browser_use import BrowserSession
 from browser_use.browser.events import ClickElementEvent
 
@@ -275,10 +377,10 @@ class ActionDispatcher:
 ### Pattern 3: Service Composition
 
 ```python
-# mvp/mcp_server.py
+# navigator/server/mcp.py
 from browser_use import BrowserSession
-from mvp.browser_session_manager import BrowserSessionManager
-from mvp.action_dispatcher import ActionDispatcher
+from navigator.session.manager import BrowserSessionManager
+from navigator.action.dispatcher import ActionDispatcher
 
 class BrowserAutomationMCPServer:
     """Composes our services with Browser-Use."""
@@ -295,8 +397,8 @@ class BrowserAutomationMCPServer:
 
 ### Branching Strategy
 
-- **main**: Stable code with working MVP
-- **feature/***: New features in `mvp/`
+- **main**: Stable code with working service
+- **feature/***: New features in `navigator/`
 - **browser-use-upgrade**: Browser-Use upgrades
 - **browser-use-modified**: If we modify Browser-Use code
 
@@ -304,8 +406,8 @@ class BrowserAutomationMCPServer:
 
 Follow conventional commits:
 ```
-feat(mvp): Add presentation flow manager
-fix(mvp): Fix action dispatcher timeout handling
+feat(navigator): Add presentation flow manager
+fix(navigator): Fix action dispatcher timeout handling
 docs(dev-docs): Update architecture documentation
 upgrade(browser-use): Upgrade to Browser-Use v0.12.0
 ```
@@ -313,10 +415,10 @@ upgrade(browser-use): Upgrade to Browser-Use v0.12.0
 ### Before Committing
 
 1. ✅ Run tests: `uv run pytest tests/ci/`
-2. ✅ Run validation: `uv run python mvp/validate_mvp.py`
+2. ✅ Run validation: `uv run python navigator/tests/validate_mvp.py`
 3. ✅ Check code style: `uv run ruff check --fix`
 4. ✅ Check types: `uv run pyright`
-5. ✅ Verify imports: All `mvp/` imports from `browser_use/` work
+5. ✅ Verify imports: All `navigator/` imports from `browser_use/` work
 6. ✅ Review changes: No accidental modifications to `browser_use/`
 
 ---
@@ -352,8 +454,8 @@ upgrade(browser-use): Upgrade to Browser-Use v0.12.0
 # Run tests
 uv run pytest tests/ci/
 
-# Validate MVP
-uv run python mvp/validate_mvp.py
+# Validate navigator functionality
+uv run python navigator/tests/validate_mvp.py
 
 # Check code style
 uv run ruff check --fix
@@ -363,7 +465,7 @@ uv run ruff format
 uv run pyright
 
 # Start server
-uv run python mvp/start_server.py
+uv run python navigator/start_server.py
 
 # Install dependencies
 uv sync
@@ -371,35 +473,58 @@ uv sync
 
 ### Important Files
 
-- **Our Code**: `mvp/*.py`
-- **Browser-Use Code**: `browser_use/*.py`
+- **Our Code**: `navigator/**/*.py`
+- **Browser-Use Code**: `browser_use/**/*.py`
 - **Our Docs**: `dev-docs/*.md`
 - **Dependencies**: `pyproject.toml`
 - **Configuration**: `.env` (not committed)
 
 ### Key Principles
 
-1. ✅ Keep `mvp/` and `browser_use/` separate
+1. ✅ Keep `navigator/` and `browser_use/` separate
 2. ✅ Extend, don't modify Browser-Use when possible
 3. ✅ Document Browser-Use modifications if needed
 4. ✅ Test after Browser-Use upgrades
 5. ✅ Use Browser-Use APIs, don't hack internals
 6. ✅ Follow Browser-Use code style conventions
 7. ✅ Keep upgrade path clear
+8. ✅ Treat `browser_use/` as embedded source (not external dependency)
+
+---
+
+## Architecture Approach
+
+### Current Setup: Embedded Source with Extension Boundaries
+
+**What We're Doing:**
+- **`browser_use/`**: Embedded source code of Browser-Use library (version 0.11.2)
+- **`navigator/`**: Our extensions that import `browser_use` as a library
+- **Import Pattern**: `navigator/` code imports from `browser_use` like: `from browser_use import BrowserSession`
+
+**Why This Approach:**
+- ✅ **Full Source Access**: Can debug and optimize Browser-Use internals directly
+- ✅ **Clear Boundaries**: `navigator/` extends without modifying `browser_use/`
+- ✅ **Performance**: No abstraction overhead, direct access to source
+- ✅ **Flexibility**: Can modify `browser_use/` if needed (with documentation)
+- ✅ **Upgrade Path**: Can upgrade `browser_use/` directory via git merge/replace
+
+**Alternative Approaches Considered:**
+- ❌ **External Library (PyPI)**: Would lose source access and debugging capability
+- ❌ **Embed navigator into browser_use**: Would mix concerns and complicate upstream contributions
 
 ---
 
 ## Summary
 
 **Core Philosophy**: 
-- **Browser-Use** (`browser_use/`) = Upstream library code (keep clean, upgradeable)
-- **Our Extensions** (`mvp/`) = Our custom code (full control, our responsibility)
+- **Browser-Use** (`browser_use/`) = Embedded upstream library source (keep clean, upgradeable)
+- **Our Extensions** (`navigator/`) = Our custom code (full control, our responsibility)
 
 **Key Rule**: 
-> Prefer extending Browser-Use in `mvp/` over modifying `browser_use/` directly. Only modify `browser_use/` when absolutely necessary, and document it clearly.
+> Prefer extending Browser-Use in `navigator/` over modifying `browser_use/` directly. Only modify `browser_use/` when absolutely necessary, and document it clearly.
 
 **Upgrade Path**: 
-> Keep `browser_use/` code clean and upgradeable. When upgrading, validate all `mvp/` code still works with new Browser-Use version.
+> Keep `browser_use/` code clean and upgradeable. When upgrading, validate all `navigator/` code still works with new Browser-Use version. Use git merge/replace strategy to upgrade the `browser_use/` directory.
 
 ---
 

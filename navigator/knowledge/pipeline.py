@@ -5,7 +5,10 @@ Integrates exploration, analysis, and storage into a complete pipeline.
 """
 
 import logging
+import re
+import time
 from typing import Any
+from urllib.parse import urlparse
 
 from uuid_extensions import uuid7str
 
@@ -42,6 +45,8 @@ class KnowledgePipeline:
 		max_depth: int = 3,
 		strategy: ExplorationStrategy = ExplorationStrategy.BFS,
 		progress_observer: ProgressObserver | None = None,
+		include_paths: list[str] | None = None,
+		exclude_paths: list[str] | None = None,
 	):
 		"""
 		Initialize the knowledge pipeline.
@@ -53,6 +58,8 @@ class KnowledgePipeline:
 			max_depth: Maximum exploration depth
 			strategy: Exploration strategy (BFS or DFS)
 			progress_observer: Progress observer for real-time updates (optional)
+			include_paths: List of path patterns to include (e.g., ['/docs/*', '/api/v1/*'])
+			exclude_paths: List of path patterns to exclude (e.g., ['/admin/*', '/api/*'])
 		"""
 		self.browser_session = browser_session
 		self.storage = storage or KnowledgeStorage(use_arangodb=False)
@@ -75,10 +82,20 @@ class KnowledgePipeline:
 		else:
 			self.progress_observer = progress_observer
 		
+		# Path restrictions
+		self.include_paths = include_paths or []
+		self.exclude_paths = exclude_paths or []
+		
 		# Job state tracking
 		self.current_job_id: str | None = None
 		self.job_status: str = "idle"  # 'idle', 'running', 'paused', 'completed', 'failed', 'cancelled'
 		self.job_paused: bool = False
+		
+		# Enhanced progress tracking
+		self.job_start_time: float | None = None
+		self.page_processing_times: list[float] = []  # Track processing times for rate calculation
+		self.recent_completed_pages: list[dict[str, Any]] = []  # Recent pages with titles
+		self.max_recent_pages: int = 10  # Keep last 10 completed pages
 		
 		logger.debug("KnowledgePipeline initialized")
 	
@@ -131,11 +148,50 @@ class KnowledgePipeline:
 			}
 		except Exception as e:
 			logger.error(f"Failed to process URL {url}: {e}")
+			# Categorize error
+			error_type = self._categorize_error(str(e), url)
 			return {
 				'url': url,
 				'success': False,
 				'error': str(e),
+				'error_type': error_type,
 			}
+	
+	def _categorize_error(self, error_msg: str, url: str) -> str:
+		"""
+		Categorize error type for better error handling.
+		
+		Args:
+			error_msg: Error message
+			url: URL that failed
+		
+		Returns:
+			Error category: 'network', 'timeout', 'http_4xx', 'http_5xx', 'parsing', 'other'
+		"""
+		error_lower = error_msg.lower()
+		
+		# Network errors
+		if any(keyword in error_lower for keyword in ['connection', 'network', 'dns', 'resolve', 'refused']):
+			return 'network'
+		
+		# Timeout errors
+		if any(keyword in error_lower for keyword in ['timeout', 'timed out', 'exceeded']):
+			return 'timeout'
+		
+		# HTTP 4xx errors
+		if any(keyword in error_lower for keyword in ['404', '403', '401', '400', 'not found', 'forbidden', 'unauthorized']):
+			return 'http_4xx'
+		
+		# HTTP 5xx errors
+		if any(keyword in error_lower for keyword in ['500', '502', '503', '504', 'server error', 'bad gateway', 'service unavailable']):
+			return 'http_5xx'
+		
+		# Parsing errors
+		if any(keyword in error_lower for keyword in ['parse', 'parsing', 'invalid', 'malformed', 'syntax']):
+			return 'parsing'
+		
+		# Default to 'other'
+		return 'other'
 	
 	async def explore_and_store(
 		self,
@@ -162,6 +218,11 @@ class KnowledgePipeline:
 		self.job_status = "running"
 		self.job_paused = False
 		
+		# Reset enhanced tracking
+		self.job_start_time = time.time()
+		self.page_processing_times = []
+		self.recent_completed_pages = []
+		
 		results = {
 			'job_id': job_id,
 			'start_url': start_url,
@@ -171,9 +232,22 @@ class KnowledgePipeline:
 			'external_links_detected': 0,
 			'errors': [],
 			'results': [],
+			'website_metadata': {},  # Will be populated from start page
 		}
 		
 		try:
+			# Extract website metadata from start page
+			try:
+				start_content = await self.semantic_analyzer.extract_content(start_url)
+				results['website_metadata'] = {
+					'title': start_content.get('title', ''),
+					'description': start_content.get('description', ''),
+					'url': start_url,
+				}
+			except Exception as e:
+				logger.warning(f"Failed to extract website metadata: {e}")
+				results['website_metadata'] = {'url': start_url}
+			
 			# Emit initial progress
 			await self.progress_observer.on_progress(ExplorationProgress(
 				job_id=job_id,
@@ -213,7 +287,11 @@ class KnowledgePipeline:
 				# Only add internal links to exploration queue
 				# CRITICAL: External links are detected and stored, but NOT explored
 				if is_internal and link_url and link_url not in processed_urls:
-					urls_to_process.append(link_url)
+					# Apply path filtering
+					if self._should_explore_url(link_url):
+						urls_to_process.append(link_url)
+					else:
+						logger.debug(f"Skipping URL due to path restrictions: {link_url}")
 				elif not is_internal:
 					external_count += 1
 					results['external_links_detected'] += 1
@@ -223,6 +301,52 @@ class KnowledgePipeline:
 			# Limit to max_pages if specified
 			if max_pages:
 				urls_to_process = urls_to_process[:max_pages]
+	
+	def _should_explore_url(self, url: str) -> bool:
+		"""
+		Check if URL should be explored based on include/exclude path patterns.
+		
+		Args:
+			url: URL to check
+		
+		Returns:
+			True if URL should be explored, False otherwise
+		"""
+		parsed = urlparse(url)
+		path = parsed.path
+		
+		# If include_paths specified, URL must match at least one pattern
+		if self.include_paths:
+			matches_include = False
+			for pattern in self.include_paths:
+				if self._match_path_pattern(path, pattern):
+					matches_include = True
+					break
+			if not matches_include:
+				return False
+		
+		# If exclude_paths specified, URL must not match any pattern
+		if self.exclude_paths:
+			for pattern in self.exclude_paths:
+				if self._match_path_pattern(path, pattern):
+					return False
+		
+		return True
+	
+	def _match_path_pattern(self, path: str, pattern: str) -> bool:
+		"""
+		Match path against pattern (supports * wildcard).
+		
+		Args:
+			path: URL path to match
+			pattern: Pattern with * wildcard support (e.g., '/docs/*', '/api/v1/*')
+		
+		Returns:
+			True if path matches pattern
+		"""
+		# Convert pattern to regex
+		pattern_regex = pattern.replace('*', '.*')
+		return bool(re.match(pattern_regex, path))
 			
 			# Process each URL
 			for url in urls_to_process:
@@ -249,6 +373,25 @@ class KnowledgePipeline:
 					continue
 				processed_urls.add(url)
 				
+				# Check for cancellation
+				if self.job_status == "cancelled":
+					logger.info(f"Job {job_id} cancelled, stopping exploration")
+					break
+				elif self.job_status == "cancelling":
+					# Process current page, then cancel
+					logger.info(f"Job {job_id} cancelling after current page")
+				
+				# Track processing time
+				page_start_time = time.time()
+				
+				# Calculate enhanced metrics
+				estimated_time = self._calculate_estimated_time_remaining(
+					pages_completed=results['pages_stored'],
+					pages_queued=len(urls_to_process) - results['pages_processed'],
+					processing_times=self.page_processing_times,
+				)
+				processing_rate = self._calculate_processing_rate(self.page_processing_times)
+				
 				# Emit progress before processing
 				await self.progress_observer.on_progress(ExplorationProgress(
 					job_id=job_id,
@@ -259,6 +402,9 @@ class KnowledgePipeline:
 					pages_failed=results['pages_failed'],
 					links_discovered=len(links),
 					external_links_detected=results['external_links_detected'],
+					estimated_time_remaining=estimated_time,
+					processing_rate=processing_rate,
+					recent_pages=self.recent_completed_pages.copy(),
 				))
 				
 				# Process page
@@ -267,8 +413,27 @@ class KnowledgePipeline:
 				results['results'].append(process_result)
 				results['pages_processed'] += 1
 				
+				# Track processing time
+				page_processing_time = time.time() - page_start_time
+				self.page_processing_times.append(page_processing_time)
+				# Keep only last 20 processing times for rate calculation
+				if len(self.page_processing_times) > 20:
+					self.page_processing_times = self.page_processing_times[-20:]
+				
 				if process_result.get('success'):
 					results['pages_stored'] += 1
+					
+					# Track recent completed pages with titles
+					page_title = process_result.get('content', {}).get('title', url)
+					self.recent_completed_pages.append({
+						'url': url,
+						'title': page_title,
+						'completed_at': time.time(),
+					})
+					# Keep only last N pages
+					if len(self.recent_completed_pages) > self.max_recent_pages:
+						self.recent_completed_pages = self.recent_completed_pages[-self.max_recent_pages:]
+					
 					await self.progress_observer.on_page_completed(url, process_result)
 					
 					# Discover and store links from this page
@@ -294,8 +459,11 @@ class KnowledgePipeline:
 									await self.progress_observer.on_external_link_detected(url, link_url)
 									logger.debug(f"External link detected: {url} -> {link_url} (stored but not exploring)")
 								elif link_url not in processed_urls and link_url not in urls_to_process:
-									# Add new internal link to queue
-									urls_to_process.append(link_url)
+									# Apply path filtering before adding to queue
+									if self._should_explore_url(link_url):
+										urls_to_process.append(link_url)
+									else:
+										logger.debug(f"Skipping URL due to path restrictions: {link_url}")
 					except Exception as e:
 						logger.error(f"Failed to discover links from {url}: {e}")
 						await self.progress_observer.on_error(url, str(e))
@@ -304,9 +472,16 @@ class KnowledgePipeline:
 					results['errors'].append(process_result)
 					error_msg = process_result.get('error', 'Unknown error')
 					await self.progress_observer.on_error(url, error_msg)
+				
+				# Check if cancelling after current page
+				if self.job_status == "cancelling":
+					self.job_status = "cancelled"
+					logger.info(f"Job {job_id} cancelled after processing current page")
+					break
 			
-			# Mark as completed
-			self.job_status = "completed"
+			# Mark as completed (unless cancelled)
+			if self.job_status != "cancelled":
+				self.job_status = "completed"
 			await self.progress_observer.on_progress(ExplorationProgress(
 				job_id=job_id,
 				status="completed",
@@ -361,16 +536,24 @@ class KnowledgePipeline:
 			return True
 		return False
 	
-	def cancel_job(self) -> bool:
+	def cancel_job(self, wait_for_current_page: bool = False) -> bool:
 		"""
 		Cancel the current exploration job.
+		
+		Args:
+			wait_for_current_page: If True, wait for current page to complete before cancelling
 		
 		Returns:
 			True if job was cancelled, False if no job running
 		"""
 		if self.job_status in ("running", "paused"):
-			self.job_status = "cancelled"
-			self.job_paused = False
+			if wait_for_current_page:
+				# Set flag to cancel after current page completes
+				self.job_status = "cancelling"
+			else:
+				# Cancel immediately
+				self.job_status = "cancelled"
+				self.job_paused = False
 			return True
 		return False
 	
@@ -386,6 +569,56 @@ class KnowledgePipeline:
 			'status': self.job_status,
 			'paused': self.job_paused,
 		}
+	
+	def _calculate_estimated_time_remaining(
+		self,
+		pages_completed: int,
+		pages_queued: int,
+		processing_times: list[float],
+	) -> float | None:
+		"""
+		Calculate estimated time remaining based on average processing time.
+		
+		Args:
+			pages_completed: Number of pages completed
+			pages_queued: Number of pages remaining
+			processing_times: List of page processing times in seconds
+		
+		Returns:
+			Estimated time remaining in seconds, or None if cannot calculate
+		"""
+		if not processing_times or pages_queued == 0:
+			return None
+		
+		# Calculate average processing time
+		avg_time = sum(processing_times) / len(processing_times)
+		
+		# Estimate remaining time
+		estimated = avg_time * pages_queued
+		return estimated
+	
+	def _calculate_processing_rate(self, processing_times: list[float]) -> float | None:
+		"""
+		Calculate processing rate (pages per minute).
+		
+		Args:
+			processing_times: List of page processing times in seconds
+		
+		Returns:
+			Processing rate in pages per minute, or None if cannot calculate
+		"""
+		if not processing_times:
+			return None
+		
+		# Calculate average processing time per page
+		avg_time = sum(processing_times) / len(processing_times)
+		
+		if avg_time == 0:
+			return None
+		
+		# Convert to pages per minute
+		pages_per_minute = 60.0 / avg_time
+		return pages_per_minute
 	
 	async def search_similar(self, query_text: str, top_k: int = 5) -> list[dict[str, Any]]:
 		"""

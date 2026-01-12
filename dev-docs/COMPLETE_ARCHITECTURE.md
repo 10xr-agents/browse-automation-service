@@ -27,12 +27,14 @@
 1. **Presentation/Agent Flow**: Real-time browser automation with video streaming, controlled via MCP protocol for live demonstrations and presentations
 2. **Knowledge Retrieval Flow**: Comprehensive website exploration, semantic understanding, and knowledge storage
 
-**Important**: We are **extending the Browser-Use codebase directly**, not building on top of it as an external dependency. This repository **IS** the Browser-Use repository, and we have full source code access. This approach provides:
+**Important**: We are **extending the Browser-Use codebase directly**, not building on top of it as an external dependency. This repository contains the **embedded source code** of Browser-Use (version 0.11.2) in the `browser_use/` directory, and our extensions in the `navigator/` directory. This approach provides:
 
 - **Better Performance**: Direct access to source code, no abstraction overhead
-- **Full Control**: Can modify Browser-Use internals directly if needed
+- **Full Control**: Can modify Browser-Use internals directly if needed (though we prefer extending)
 - **Customization**: Extend existing components (BrowserSession, BrowserProfile, etc.) for our specific use cases
 - **Optimization**: Optimize Browser-Use components specifically for our presentation and knowledge retrieval flows
+- **Clear Boundaries**: `navigator/` code imports from `browser_use/` as a library, maintaining separation of concerns
+- **Upgrade Path**: Can upgrade `browser_use/` directory via git merge/replace while keeping `navigator/` extensions intact
 
 The service extends the existing **Browser-Use** library components (BrowserSession, BrowserProfile, Tools, Agent, etc.) with new capabilities for MCP integration, LiveKit streaming, and knowledge retrieval.
 
@@ -92,14 +94,27 @@ A production-ready server that:
 
 ## Existing Foundation (Browser-Use Library)
 
-**Note**: We are working **within the Browser-Use codebase** (we have the source code in `browser_use/` directory), not using it as an external dependency. This allows us to:
+### Architecture Approach: Embedded Source with Extension Boundaries
 
-1. **Extend existing components** directly (e.g., BrowserSession, BrowserProfile)
-2. **Modify internals** if needed for better performance
+**Current Setup:**
+- **`browser_use/`**: Embedded source code of Browser-Use library (version 0.11.2 from `pyproject.toml`)
+- **`navigator/`**: Our extensions that import `browser_use` as a library
+- **Import Pattern**: All `navigator/` code imports from `browser_use` like: `from browser_use import BrowserSession`
+
+**Why This Approach:**
+- ✅ **Full Source Access**: Can debug and optimize Browser-Use internals directly
+- ✅ **Clear Boundaries**: `navigator/` extends without modifying `browser_use/` directly
+- ✅ **Performance**: No abstraction overhead, direct access to source
+- ✅ **Flexibility**: Can modify `browser_use/` if needed (with documentation)
+- ✅ **Upgrade Path**: Can upgrade `browser_use/` directory via git merge/replace
+
+**What This Enables:**
+1. **Extend existing components** directly (e.g., BrowserSession, BrowserProfile) via wrapper classes in `navigator/`
+2. **Modify internals** if needed for better performance (with proper documentation)
 3. **Add new capabilities** seamlessly integrated with existing code
 4. **Optimize** Browser-Use components for our specific use cases
 
-The codebase includes the **Browser-Use** library source code, which provides core browser automation capabilities.
+The codebase includes the **Browser-Use** library source code, which provides core browser automation capabilities. Our `navigator/` extensions build on top of this foundation using standard Python imports.
 
 ### Core Components
 
@@ -959,7 +974,7 @@ Events are defined in `browser_use/browser/events.py`:
 ### Directory Structure
 
 ```
-browser_use/              # Existing Browser-Use library
+browser_use/              # Embedded Browser-Use library source (v0.11.2)
 ├── agent/                # Agent orchestration
 ├── browser/              # Browser session management
 ├── tools/                # Action registry
@@ -967,7 +982,7 @@ browser_use/              # Existing Browser-Use library
 ├── llm/                  # LLM integration
 └── ...
 
-navigator/                # Navigator extensions
+navigator/                # Our extensions (imports browser_use as library)
 ├── action/               # Action system
 │   ├── command.py       # ActionCommand primitives
 │   └── dispatcher.py    # Action execution engine
@@ -1003,6 +1018,27 @@ dev-docs/                 # Documentation
 ├── PROTOCOL_AND_INTERFACE.md  # Communication protocols
 └── AGENT_BROWSER_COORDINATION.md  # Coordination protocol
 ```
+
+### Import Relationship
+
+**Key Principle**: `navigator/` code treats `browser_use/` as an imported library, even though it's embedded source.
+
+**Example Import Pattern** (from `navigator/session/manager.py`):
+```python
+from browser_use import BrowserSession
+from browser_use.browser.profile import BrowserProfile
+```
+
+**Why This Works**:
+- Python's import system treats `browser_use/` as a package in the same repository
+- No special configuration needed - standard Python imports
+- `navigator/` code doesn't need to know `browser_use/` is embedded vs external
+- Easy to switch to external library later if needed (just change imports)
+
+**Upgrade Strategy**:
+- When upgrading Browser-Use, replace/merge the `browser_use/` directory
+- `navigator/` imports continue to work as long as Browser-Use APIs remain compatible
+- Test all `navigator/` functionality after upgrade
 
 ---
 
@@ -1501,5 +1537,33 @@ Add `ResourceManager` component:
 
 ---
 
+## Architecture Summary: Embedded Source Approach
+
+### Current Architecture Decision
+
+**What We're Doing:**
+- **Embedded Source**: Browser-Use library source code (v0.11.2) is embedded in `browser_use/` directory
+- **Extension Layer**: Our custom code lives in `navigator/` and imports from `browser_use/` as a library
+- **Clear Boundaries**: `navigator/` extends Browser-Use without modifying it directly (preferred approach)
+
+**Why This Approach:**
+1. **Full Source Access**: Can debug, optimize, and modify Browser-Use internals when needed
+2. **Performance**: No abstraction overhead - direct access to source code
+3. **Flexibility**: Can modify `browser_use/` if absolutely necessary (with documentation)
+4. **Clear Separation**: `navigator/` code is clearly separated from upstream code
+5. **Upgrade Path**: Can upgrade `browser_use/` directory via git merge/replace
+
+**Alternative Approaches Considered:**
+- ❌ **External Library (PyPI)**: Would lose source access and debugging capability
+- ❌ **Embed navigator into browser_use**: Would mix concerns and complicate upstream contributions
+
+**Upgrade Process:**
+- See `.cursorrules` for detailed upgrade guide
+- Use git merge/replace strategy to upgrade `browser_use/` directory
+- Validate all `navigator/` functionality after upgrade
+- Document breaking changes and required code updates
+
+---
+
 *Last Updated: 2025-01-12*
-*Version: 3.0.0*
+*Version: 3.1.0*

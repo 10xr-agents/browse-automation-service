@@ -95,6 +95,121 @@ def _setup_routes(app: FastAPI) -> None:
 		"""Get number of WebSocket connections for a room."""
 		count = event_broadcaster.get_connection_count(room_name)
 		return JSONResponse({'room_name': room_name, 'connection_count': count})
+	
+	@app.websocket('/api/knowledge/explore/ws/{job_id}')
+	async def knowledge_exploration_websocket(websocket: WebSocket, job_id: str):
+		"""WebSocket endpoint for real-time knowledge retrieval progress updates.
+		
+		Args:
+			websocket: WebSocket connection
+			job_id: Knowledge retrieval job ID
+		"""
+		logger.info(f'[WebSocket] New knowledge exploration connection for job: {job_id}')
+		
+		await websocket.accept()
+		
+		try:
+			# Import here to avoid circular dependencies
+			from navigator.knowledge.rest_api import _job_registry
+			from navigator.knowledge.progress_observer import WebSocketProgressObserver, CompositeProgressObserver, LoggingProgressObserver
+			
+			# Check if job exists
+			job = _job_registry.get(job_id)
+			if not job:
+				await websocket.send_json({
+					'type': 'error',
+					'error': f'Job {job_id} not found',
+				})
+				await websocket.close()
+				return
+			
+			# Create WebSocket progress observer for this connection
+			class JobWebSocketObserver:
+				"""WebSocket observer for a specific job."""
+				def __init__(self, websocket: WebSocket):
+					self.websocket = websocket
+				
+				async def on_progress(self, progress):
+					"""Send progress update via WebSocket."""
+					try:
+						await self.websocket.send_json({
+							'type': 'progress',
+							'data': progress.to_dict() if hasattr(progress, 'to_dict') else progress,
+						})
+					except Exception as e:
+						logger.error(f"Error sending progress via WebSocket: {e}")
+				
+				async def on_page_completed(self, url: str, result: dict[str, Any]):
+					"""Send page completion via WebSocket."""
+					try:
+						await self.websocket.send_json({
+							'type': 'page_completed',
+							'data': {'url': url, 'result': result},
+						})
+					except Exception as e:
+						logger.error(f"Error sending page completion via WebSocket: {e}")
+				
+				async def on_external_link_detected(self, from_url: str, to_url: str):
+					"""Send external link detection via WebSocket."""
+					try:
+						await self.websocket.send_json({
+							'type': 'external_link_detected',
+							'data': {'from_url': from_url, 'to_url': to_url},
+						})
+					except Exception as e:
+						logger.error(f"Error sending external link detection via WebSocket: {e}")
+				
+				async def on_error(self, url: str, error: str):
+					"""Send error via WebSocket."""
+					try:
+						await self.websocket.send_json({
+							'type': 'error',
+							'data': {'url': url, 'error': error},
+						})
+					except Exception as e:
+						logger.error(f"Error sending error via WebSocket: {e}")
+			
+			ws_observer = JobWebSocketObserver(websocket)
+			
+			# Add observer to pipeline if it exists
+			pipeline = job.get('pipeline')
+			if pipeline and hasattr(pipeline, 'progress_observer'):
+				# Wrap existing observer with composite that includes WebSocket
+				existing_observer = pipeline.progress_observer
+				if isinstance(existing_observer, CompositeProgressObserver):
+					existing_observer.observers.append(ws_observer)
+				else:
+					# Create composite with existing + WebSocket
+					pipeline.progress_observer = CompositeProgressObserver([
+						existing_observer,
+						ws_observer,
+					])
+			
+			# Send initial status
+			await websocket.send_json({
+				'type': 'connected',
+				'job_id': job_id,
+				'status': job.get('status', 'unknown'),
+			})
+			
+			# Keep connection alive and listen for messages
+			while True:
+				try:
+					data = await websocket.receive_json()
+					logger.debug(f'[WebSocket] Received message for job {job_id}: {data}')
+					# Handle incoming messages if needed (e.g., pause/resume commands)
+				except WebSocketDisconnect:
+					logger.info(f'[WebSocket] Client disconnected for job: {job_id}')
+					break
+				except Exception as e:
+					logger.error(f'[WebSocket] Error in WebSocket connection for job {job_id}: {e}', exc_info=True)
+					break
+		except Exception as e:
+			logger.error(f'[WebSocket] Error setting up knowledge exploration WebSocket: {e}', exc_info=True)
+			try:
+				await websocket.close()
+			except Exception:
+				pass
 
 	@app.post('/mcp/tools/call')
 	async def call_mcp_tool(request: Request):

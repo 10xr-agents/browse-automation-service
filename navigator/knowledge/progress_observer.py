@@ -31,6 +31,10 @@ class ExplorationProgress:
 	depth: int = 0
 	error: str | None = None
 	timestamp: str | None = None
+	# Enhanced metrics
+	estimated_time_remaining: float | None = None  # seconds
+	processing_rate: float | None = None  # pages per minute
+	recent_pages: list[dict[str, Any]] | None = None  # List of recently completed pages with titles
 	
 	def to_dict(self) -> dict[str, Any]:
 		"""Convert to dictionary."""

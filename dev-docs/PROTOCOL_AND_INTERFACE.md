@@ -3,14 +3,16 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Communication Architecture](#communication-architecture)
-3. [Redis Integration](#redis-integration)
-4. [REST API](#rest-api)
-5. [MCP Protocol](#mcp-protocol)
-6. [WebSocket Interface](#websocket-interface)
-7. [LiveKit Integration](#livekit-integration)
-8. [Event Types](#event-types)
-9. [Integration Examples](#integration-examples)
+2. [Quick Start](#quick-start)
+3. [Communication Architecture](#communication-architecture)
+4. [Redis Integration](#redis-integration)
+5. [REST API](#rest-api)
+   - [OpenAPI/Swagger Specification](#openapiswagger-specification)
+6. [MCP Protocol](#mcp-protocol)
+7. [WebSocket Interface](#websocket-interface)
+8. [LiveKit Integration](#livekit-integration)
+9. [Event Types](#event-types)
+10. [Integration Examples](#integration-examples)
 
 ---
 
@@ -23,6 +25,58 @@ This document describes all communication protocols and interfaces for interacti
 - **MCP Protocol**: Model Context Protocol for standardized tool access
 - **WebSocket**: Real-time event streaming (fallback to Redis Pub/Sub)
 - **LiveKit**: Video streaming and real-time data channels
+
+**Quick Start**: See `dev-docs/START_SERVER.md` for instructions on starting the server.
+
+---
+
+## Quick Start
+
+### Starting the Server
+
+```bash
+# 1. Install dependencies
+uv sync
+
+# 2. Start Redis (optional but recommended)
+redis-server  # Or ensure Redis is running on localhost:6379
+
+# 3. Start the server
+uv run python navigator/start_server.py
+```
+
+The server will start on `http://localhost:8000` with:
+- **REST API**: `http://localhost:8000`
+- **WebSocket**: `ws://localhost:8000/mcp/events/{room_name}`
+- **Health Check**: `http://localhost:8000/health`
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
+
+### Prerequisites
+
+- **Python >= 3.11**
+- **Redis** (optional, for BullMQ and Redis Pub/Sub)
+- **Chromium** (install with `uvx browser-use install`)
+
+### Environment Variables
+
+Create a `.env` file (optional):
+
+```bash
+# Optional: LLM API Keys
+OPENAI_API_KEY=your_key
+ANTHROPIC_API_KEY=your_key
+
+# Optional: LiveKit (for video streaming)
+LIVEKIT_URL=wss://livekit.example.com
+LIVEKIT_API_KEY=your_key
+LIVEKIT_API_SECRET=your_secret
+
+# Optional: Redis (if not using default)
+REDIS_URL=redis://localhost:6379
+```
+
+**For detailed setup instructions, see**: `dev-docs/START_SERVER.md`
 
 ---
 
@@ -386,6 +440,115 @@ job_id = await add_exploration_job(
 ### Base URL
 
 **Default**: `http://localhost:8000`
+
+### OpenAPI/Swagger Specification
+
+The complete OpenAPI 3.0 specification is available in `dev-docs/openapi.yaml`. This specification can be used to:
+
+- **Generate API clients** in various languages (Python, TypeScript, Go, etc.)
+- **View interactive API documentation** using Swagger UI or ReDoc
+- **Validate API requests/responses** during development
+- **Generate mock servers** for testing
+- **Integrate with API gateways** and documentation platforms
+
+**Viewing the API Documentation:**
+
+1. **Swagger UI** (recommended):
+   ```bash
+   # Install swagger-ui-cli
+   npm install -g swagger-ui-cli
+   
+   # Serve the OpenAPI spec
+   swagger-ui dev-docs/openapi.yaml
+   ```
+   
+   Or use the online Swagger Editor: https://editor.swagger.io/
+
+2. **ReDoc**:
+   ```bash
+   # Install redoc-cli
+   npm install -g redoc-cli
+   
+   # Generate static HTML
+   redoc-cli build dev-docs/openapi.yaml
+   ```
+
+3. **FastAPI Auto-Generated Docs**:
+   If the FastAPI server is running, visit:
+   - Swagger UI: `http://localhost:8000/docs`
+   - ReDoc: `http://localhost:8000/redoc`
+
+**Using the OpenAPI Spec:**
+
+```python
+# Generate Python client using openapi-generator
+openapi-generator generate \
+  -i dev-docs/openapi.yaml \
+  -g python \
+  -o ./generated-client
+
+# Or use openapi-python-client
+pip install openapi-python-client
+openapi-python-client generate --path dev-docs/openapi.yaml
+```
+
+```typescript
+// Generate TypeScript client
+openapi-generator generate \
+  -i dev-docs/openapi.yaml \
+  -g typescript-axios \
+  -o ./generated-client
+```
+
+**FastAPI Auto-Generated Documentation:**
+
+FastAPI automatically generates OpenAPI documentation from your code. When the server is running:
+
+- **Swagger UI**: Visit `http://localhost:8000/docs` for interactive API documentation
+- **ReDoc**: Visit `http://localhost:8000/redoc` for alternative documentation view
+- **OpenAPI JSON**: Visit `http://localhost:8000/openapi.json` for the OpenAPI spec in JSON format
+
+**Note**: The `dev-docs/openapi.yaml` file is a manually maintained specification that matches the actual API. FastAPI's auto-generated docs are based on the code, while the YAML file provides a stable, version-controlled reference.
+
+**Integrating OpenAPI Spec with FastAPI:**
+
+If you want to use the YAML spec file instead of auto-generated docs, you can load it in FastAPI:
+
+```python
+from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
+import yaml
+
+app = FastAPI()
+
+# Load custom OpenAPI spec
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    with open("dev-docs/openapi.yaml", "r") as f:
+        spec = yaml.safe_load(f)
+    
+    app.openapi_schema = spec
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+```
+
+**Validating the OpenAPI Spec:**
+
+```bash
+# Install swagger-cli
+npm install -g @apidevtools/swagger-cli
+
+# Validate the spec
+swagger-cli validate dev-docs/openapi.yaml
+
+# Bundle the spec (resolve $ref references)
+swagger-cli bundle dev-docs/openapi.yaml -o openapi-bundled.yaml
+```
+
+---
 
 ### Browser Automation Endpoints
 
