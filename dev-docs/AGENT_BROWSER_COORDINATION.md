@@ -1,5 +1,17 @@
 # Agent-Browser Coordination Protocol
 
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Communication Architecture](#communication-architecture)
+3. [Complete Session Lifecycle](#complete-session-lifecycle)
+4. [Error Handling & Recovery](#error-handling--recovery)
+5. [Performance Optimization](#performance-optimization)
+6. [Security Considerations](#security-considerations)
+7. [Implementation Examples](#implementation-examples)
+
+---
+
 ## Overview
 
 This document describes the complete protocol for communication and coordination between the **Browser Automation Service** and external agents (Voice Agent Service, CLI tools, Web UI, etc.). The protocol enables real-time browser automation with video streaming, bidirectional event communication, and comprehensive action execution.
@@ -35,892 +47,6 @@ This document describes the complete protocol for communication and coordination
 - **Events** (Browser → Agent): Use **Redis Pub/Sub** for high-frequency, real-time events
 - Video flows through LiveKit WebRTC, not between servers
 - Bidirectional event communication via Redis Pub/Sub
-
----
-
-## Communication Architecture: Redis (BullMQ + Pub/Sub)
-
-### Critical Architectural Decision
-
-**Important**: This architecture is designed to handle **thousands of concurrent browser sessions** efficiently.
-
-### The Problem
-
-We need two types of communication:
-1. **Commands** (Agent → Browser): Reliable, must not be lost (e.g., "Navigate to URL", "Click element")
-2. **Events** (Browser → Agent): High-frequency, real-time updates (e.g., "page loaded", "mouse moved", "DOM updated")
-
-Using the wrong technology for each will cause performance issues at scale.
-
----
-
-### Recommended Architecture
-
-#### 1. Agent → Browser Service (Commands)
-
-**Use: BullMQ (or Redis List)**
-
-**Why BullMQ?**
-- ✅ **Reliability**: Commands must not be lost. If Browser Service is restarting or busy, commands sit in the queue until processed.
-- ✅ **Retry Logic**: Failed commands can be retried automatically.
-- ✅ **Job Management**: Track job status (queued → active → completed/failed).
-- ✅ **Scalability**: Handle thousands of concurrent commands efficiently.
-
-**Why NOT REST/WebSocket?**
-- ❌ With thousands of agents, managing thousands of HTTP/WebSocket connections is resource-intensive.
-- ❌ TCP handshakes add latency.
-- ❌ No built-in retry or persistence.
-
-**Implementation:**
-```python
-# LiveKit Agent (Producer)
-from bullmq import Queue
-import time
-
-command_queue = Queue("browser_commands") 
-
-async def send_navigation(session_id, url):
-    await command_queue.add(
-        "navigate", 
-        {"url": url, "session_id": session_id},
-        job_id=f"{session_id}_{int(time.time())}"  # Prevent duplicates
-    )
-```
-
----
-
-#### 2. Browser Service → Agent (Events)
-
-**Use: Redis Pub/Sub** (NOT BullMQ)
-
-**Why Redis Pub/Sub?**
-- ✅ **Speed**: Sub-millisecond latency for real-time events.
-- ✅ **Fan-Out**: Multiple agents can subscribe to the same channel.
-- ✅ **Lightweight**: No persistence overhead - events are fire-and-forget.
-- ✅ **High Throughput**: Can handle millions of events per second.
-
-**Why NOT BullMQ?**
-- ❌ BullMQ creates a Redis key for every job. If you treat every event as a job, you flood Redis with millions of keys.
-- ❌ Persistence overhead for ephemeral events ("mouse moved" events don't need to be stored).
-- ❌ State management overhead (queued → active → completed) is unnecessary for real-time events.
-- ❌ If an agent misses a "hover" event from 500ms ago, it doesn't matter - no need to queue it.
-
-**Implementation:**
-```python
-# Browser Service (Publisher)
-from redis.asyncio import Redis
-import json
-import time
-
-redis_client = Redis(host='localhost', port=6379)
-
-async def broadcast_event(session_id, event_type, event_data):
-    channel = f"browser:events:{session_id}"
-    await redis_client.publish(
-        channel,
-        json.dumps({
-            "type": event_type,
-            "data": event_data,
-            "timestamp": time.time()
-        })
-    )
-```
-
-```python
-# LiveKit Agent (Consumer)
-import asyncio
-from redis.asyncio import Redis
-import json
-
-async def listen_for_events(session_id):
-    redis = Redis(host='localhost', port=6379)
-    pubsub = redis.pubsub()
-    
-    # Subscribe to this session's channel
-    channel = f"browser:events:{session_id}"
-    await pubsub.subscribe(channel)
-
-    async for message in pubsub.listen():
-        if message['type'] == 'message':
-            event_data = json.loads(message['data'])
-            # React immediately (e.g., Speak "Page loaded")
-            if event_data['type'] == 'page_loaded':
-                await ctx.api.speak("I see the page is ready.")
-```
-
----
-
-#### 3. Heavy Results (Browser → Agent)
-
-**Use: Redis/S3 + Pub/Sub Notification**
-
-For large data (e.g., 5MB scraped JSON, screenshots):
-- Store data in Redis (for small data) or S3 (for large data)
-- Send notification via Pub/Sub with a reference ID
-- Agent retrieves data using the reference ID
-
----
-
-### Summary Strategy
-
-| Communication Type | Direction | Technology | Why? |
-|-------------------|-----------|------------|------|
-| **Commands** (Navigate, Click, Type) | Agent → Browser | **BullMQ** | Needs persistence & retry if browser is busy. |
-| **Real-time Events** (Page loaded, DOM updated, Mouse moved) | Browser → Agent | **Redis Pub/Sub** | Needs <5ms latency. No persistence needed. |
-| **Heavy Results** (Scraped data, Screenshots) | Browser → Agent | **Redis/S3 + Pub/Sub** | Store data, notify agent of location via Pub/Sub. |
-
-### Benefits
-
-- **Fast Event Loop**: Pub/Sub keeps real-time events fast (<5ms latency)
-- **Reliable Commands**: BullMQ ensures automation tasks never get lost
-- **Scalable**: Handles thousands of concurrent sessions efficiently
-- **Cost-Effective**: Redis handles both use cases with different patterns
-
----
-
-## Dual Communication Mechanism
-
-The system uses **three communication channels** for different purposes:
-
-### Channel 1: BullMQ (Commands)
-
-**Purpose:** Reliable command processing (Agent → Browser)
-
-**Transport:** Redis-based job queue (BullMQ)
-
-**Communication Flow:**
-- **Agent → Browser Service**: Action commands, session control (via BullMQ queue)
-- Commands persist in Redis, won't be lost if service restarts
-- Automatic retry logic for failed commands
-- Job status tracking (queued → active → completed/failed)
-
-### Channel 2: Redis Pub/Sub (Events)
-
-**Purpose:** High-frequency, real-time events (Browser → Agent)
-
-**Transport:** Redis Pub/Sub
-
-**Communication Flow:**
-- **Browser Service → Agent**: Action results, browser state, error responses, real-time events (via Redis Pub/Sub)
-- Sub-millisecond latency for real-time updates
-- Fan-out to multiple subscribers
-- Fire-and-forget events (no persistence overhead)
-
-### Channel 3: LiveKit Room
-
-**Purpose:** Video streaming and real-time data
-
-**Transport:** WebRTC via LiveKit
-
-**Communication Flow:**
-- **Browser Service → LiveKit**: Video track publishing
-- **LiveKit → Agent**: Video track subscription
-- **Both services**: Data channels for real-time events (optional)
-
----
-
-## MCP Tools
-
-The Browser Automation Service exposes the following MCP tools:
-
-### 1. `start_browser_session`
-
-**Purpose:** Start a new browser session for a LiveKit room with video streaming.
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "room_name": {
-      "type": "string",
-      "description": "LiveKit room name (required)"
-    },
-    "livekit_url": {
-      "type": "string",
-      "description": "LiveKit server URL (e.g., 'wss://livekit.example.com') (optional if LIVEKIT_URL env var is set)"
-    },
-    "livekit_api_key": {
-      "type": "string",
-      "description": "LiveKit API key (optional if LIVEKIT_API_KEY env var is set)"
-    },
-    "livekit_api_secret": {
-      "type": "string",
-      "description": "LiveKit API secret (optional if LIVEKIT_API_SECRET env var is set)"
-    },
-    "livekit_token": {
-      "type": "string",
-      "description": "Pre-generated LiveKit access token (optional if api_key/secret provided)"
-    },
-    "participant_identity": {
-      "type": "string",
-      "description": "Participant identity for token generation (default: 'browser-agent')"
-    },
-    "participant_name": {
-      "type": "string",
-      "description": "Participant name for token generation (default: 'Browser Automation Agent')"
-    },
-    "initial_url": {
-      "type": "string",
-      "description": "Optional initial URL to navigate to"
-    },
-    "viewport_width": {
-      "type": "integer",
-      "description": "Browser viewport width in pixels",
-      "default": 1920
-    },
-    "viewport_height": {
-      "type": "integer",
-      "description": "Browser viewport height in pixels",
-      "default": 1080
-    },
-    "fps": {
-      "type": "integer",
-      "description": "Video frames per second",
-      "default": 10
-    }
-  },
-  "required": ["room_name"]
-}
-```
-
-**Output Schema:**
-```json
-{
-  "status": "started",
-  "room_name": "string"
-}
-```
-
-**Example:**
-```json
-{
-  "tool": "start_browser_session",
-  "arguments": {
-    "room_name": "demo-room-123",
-    "initial_url": "https://www.google.com",
-    "viewport_width": 1920,
-    "viewport_height": 1080,
-    "fps": 10
-  }
-}
-```
-
----
-
-### 2. `pause_browser_session`
-
-**Purpose:** Pause video publishing for a browser session (keep browser alive).
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "room_name": {
-      "type": "string",
-      "description": "LiveKit room name"
-    }
-  },
-  "required": ["room_name"]
-}
-```
-
-**Output Schema:**
-```json
-{
-  "status": "paused",
-  "room_name": "string"
-}
-```
-
----
-
-### 3. `resume_browser_session`
-
-**Purpose:** Resume video publishing for a browser session.
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "room_name": {
-      "type": "string",
-      "description": "LiveKit room name"
-    }
-  },
-  "required": ["room_name"]
-}
-```
-
-**Output Schema:**
-```json
-{
-  "status": "resumed",
-  "room_name": "string"
-}
-```
-
----
-
-### 4. `close_browser_session`
-
-**Purpose:** Close a browser session and stop streaming.
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "room_name": {
-      "type": "string",
-      "description": "LiveKit room name"
-    }
-  },
-  "required": ["room_name"]
-}
-```
-
-**Output Schema:**
-```json
-{
-  "status": "closed",
-  "room_name": "string"
-}
-```
-
----
-
-### 5. `execute_action`
-
-**Purpose:** Execute a browser action command.
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "room_name": {
-      "type": "string",
-      "description": "LiveKit room name"
-    },
-    "action_type": {
-      "type": "string",
-      "enum": ["navigate", "click", "type", "scroll", "wait", "go_back", "refresh", "send_keys"],
-      "description": "Type of action to execute"
-    },
-    "params": {
-      "type": "object",
-      "description": "Action-specific parameters"
-    }
-  },
-  "required": ["room_name", "action_type"]
-}
-```
-
-**Action Types and Parameters:**
-
-#### `navigate`
-```json
-{
-  "action_type": "navigate",
-  "params": {
-    "url": "https://example.com"
-  }
-}
-```
-
-#### `click`
-```json
-{
-  "action_type": "click",
-  "params": {
-    "index": 0
-  }
-}
-```
-
-#### `type`
-```json
-{
-  "action_type": "type",
-  "params": {
-    "text": "Hello World",
-    "index": 0
-  }
-}
-```
-
-#### `scroll`
-```json
-{
-  "action_type": "scroll",
-  "params": {
-    "direction": "down",
-    "amount": 500
-  }
-}
-```
-
-#### `wait`
-```json
-{
-  "action_type": "wait",
-  "params": {
-    "seconds": 2.0
-  }
-}
-```
-
-#### `send_keys`
-```json
-{
-  "action_type": "send_keys",
-  "params": {
-    "keys": "Enter"
-  }
-}
-```
-
-**Output Schema:**
-```json
-{
-  "success": true,
-  "error": null,
-  "data": {}
-}
-```
-
----
-
-### 6. `get_browser_context`
-
-**Purpose:** Get current browser context (URL, title, ready state, scroll position, viewport, cursor position).
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "room_name": {
-      "type": "string",
-      "description": "LiveKit room name"
-    }
-  },
-  "required": ["room_name"]
-}
-```
-
-**Output Schema:**
-```json
-{
-  "url": "string",
-  "title": "string",
-  "ready_state": "string",
-  "scroll_x": 0,
-  "scroll_y": 0,
-  "viewport_width": 1920,
-  "viewport_height": 1080,
-  "cursor_x": 0,
-  "cursor_y": 0
-}
-```
-
----
-
-### 7. `get_screen_content`
-
-**Purpose:** Get screen content with DOM summary, scroll position, viewport, and cursor position for agent communication.
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "room_name": {
-      "type": "string",
-      "description": "LiveKit room name"
-    }
-  },
-  "required": ["room_name"]
-}
-```
-
-**Output Schema:**
-```json
-{
-  "url": "string",
-  "title": "string",
-  "dom_summary": "string",
-  "visible_elements_count": 0,
-  "scroll_x": 0,
-  "scroll_y": 0,
-  "viewport_width": 1920,
-  "viewport_height": 1080,
-  "cursor_x": 0,
-  "cursor_y": 0
-}
-```
-
----
-
-### 8. `recover_browser_session`
-
-**Purpose:** Attempt to recover a failed browser session (reconnect LiveKit, restore state).
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "room_name": {
-      "type": "string",
-      "description": "LiveKit room name"
-    }
-  },
-  "required": ["room_name"]
-}
-```
-
-**Output Schema:**
-```json
-{
-  "status": "recovered",
-  "room_name": "string"
-}
-```
-
----
-
-## WebSocket Events
-
-The Browser Automation Service broadcasts the following events via WebSocket:
-
-### Event: `page_navigation`
-
-**Purpose:** Notify agent when page navigation occurs.
-
-**Schema:**
-```json
-{
-  "type": "page_navigation",
-  "room_name": "string",
-  "url": "string",
-  "timestamp": 1234567890.123
-}
-```
-
----
-
-### Event: `page_load_complete`
-
-**Purpose:** Notify agent when page finishes loading.
-
-**Schema:**
-```json
-{
-  "type": "page_load_complete",
-  "room_name": "string",
-  "url": "string",
-  "timestamp": 1234567890.123
-}
-```
-
----
-
-### Event: `action_completed`
-
-**Purpose:** Notify agent when an action completes successfully.
-
-**Schema:**
-```json
-{
-  "type": "action_completed",
-  "room_name": "string",
-  "action": {
-    "action_type": "string",
-    "params": {}
-  },
-  "timestamp": 1234567890.123
-}
-```
-
----
-
-### Event: `action_error`
-
-**Purpose:** Notify agent when an action fails.
-
-**Schema:**
-```json
-{
-  "type": "action_error",
-  "room_name": "string",
-  "error": "string",
-  "action": {
-    "action_type": "string",
-    "params": {}
-  },
-  "timestamp": 1234567890.123
-}
-```
-
----
-
-### Event: `dom_change`
-
-**Purpose:** Notify agent of significant DOM changes.
-
-**Schema:**
-```json
-{
-  "type": "dom_change",
-  "room_name": "string",
-  "change_type": "string",
-  "timestamp": 1234567890.123
-}
-```
-
----
-
-### Event: `browser_error`
-
-**Purpose:** Notify agent of browser errors.
-
-**Schema:**
-```json
-{
-  "type": "browser_error",
-  "room_name": "string",
-  "error": "string",
-  "timestamp": 1234567890.123
-}
-```
-
----
-
-### Event: `screen_content_update`
-
-**Purpose:** Broadcast screen content updates for agent communication.
-
-**Schema:**
-```json
-{
-  "type": "screen_content_update",
-  "room_name": "string",
-  "screen_content": {
-    "url": "string",
-    "title": "string",
-    "dom_summary": "string",
-    "visible_elements_count": 0,
-    "scroll_x": 0,
-    "scroll_y": 0,
-    "viewport_width": 1920,
-    "viewport_height": 1080,
-    "cursor_x": 0,
-    "cursor_y": 0
-  },
-  "timestamp": 1234567890.123
-}
-```
-
----
-
-### Event: `vision_analysis_complete`
-
-**Purpose:** Notify agent when vision analysis completes (for self-correction).
-
-**Schema:**
-```json
-{
-  "type": "vision_analysis_complete",
-  "room_name": "string",
-  "analysis_id": "string",
-  "visual_understanding": {
-    "blockers": ["popup", "loading_indicator"],
-    "suggested_actions": ["close_popup", "wait"],
-    "confidence": 0.95
-  },
-  "failed_action": {
-    "action_type": "string",
-    "params": {}
-  },
-  "timestamp": 1234567890.123
-}
-```
-
----
-
-### Event: `self_correction_attempt`
-
-**Purpose:** Notify agent when self-correction is attempted.
-
-**Schema:**
-```json
-{
-  "type": "self_correction_attempt",
-  "room_name": "string",
-  "original_action": {
-    "action_type": "string",
-    "params": {}
-  },
-  "corrective_action": {
-    "action_type": "string",
-    "params": {}
-  },
-  "attempt_number": 1,
-  "max_attempts": 3,
-  "timestamp": 1234567890.123
-}
-```
-
----
-
-## HTTP REST API
-
-### POST `/mcp/tools/call`
-
-**Purpose:** Execute MCP tools via HTTP.
-
-**Request:**
-```json
-{
-  "tool": "start_browser_session",
-  "arguments": {
-    "room_name": "demo-room",
-    "initial_url": "https://www.google.com"
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "status": "started",
-  "room_name": "demo-room"
-}
-```
-
----
-
-### GET `/mcp/tools`
-
-**Purpose:** List all available MCP tools.
-
-**Response:**
-```json
-{
-  "tools": [
-    {
-      "name": "start_browser_session",
-      "description": "Start a browser session for a LiveKit room with video streaming"
-    },
-    {
-      "name": "execute_action",
-      "description": "Execute a browser action command"
-    }
-    // ... more tools
-  ]
-}
-```
-
----
-
-### GET `/health`
-
-**Purpose:** Health check endpoint.
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "service": "browser-automation-websocket"
-}
-```
-
----
-
-### GET `/rooms/{room_name}/connections`
-
-**Purpose:** Get WebSocket connection count for a room.
-
-**Response:**
-```json
-{
-  "room_name": "demo-room",
-  "connections": 2
-}
-```
-
----
-
-## Redis Pub/Sub Channel
-
-### `browser:events:{room_name}`
-
-**Purpose:** Real-time event streaming for a specific room via Redis Pub/Sub.
-
-**Connection:**
-```python
-from redis.asyncio import Redis
-import json
-
-redis = Redis(host='localhost', port=6379)
-pubsub = redis.pubsub()
-
-# Subscribe to room's event channel
-channel = f"browser:events:{room_name}"
-await pubsub.subscribe(channel)
-
-# Listen for events
-async for message in pubsub.listen():
-    if message['type'] == 'message':
-        event = json.loads(message['data'])
-        # Handle event
-        handle_event(event)
-```
-
-**Message Format:**
-All events are sent as JSON strings via Redis Pub/Sub.
-
-**Example Event:**
-```json
-{
-  "type": "page_navigation",
-  "room_name": "demo-room",
-  "url": "https://www.google.com",
-  "timestamp": 1234567890.123
-}
-```
-
----
-
-## WebSocket Endpoint (Legacy/Optional)
-
-### `/mcp/events/{room_name}`
-
-**Purpose:** Alternative real-time event streaming via WebSocket (optional fallback).
-
-**Note**: The primary event streaming mechanism is **Redis Pub/Sub** for better performance and scalability. WebSocket is available as an optional fallback for clients that prefer it.
-
-**Connection:**
-```javascript
-const ws = new WebSocket('ws://localhost:8000/mcp/events/demo-room');
-```
-
-**Message Format:**
-All events are sent as JSON strings.
-
-**Example Event:**
-```json
-{
-  "type": "page_navigation",
-  "room_name": "demo-room",
-  "url": "https://www.google.com",
-  "timestamp": 1234567890.123
-}
-```
 
 ---
 
@@ -989,8 +115,9 @@ All events are sent as JSON strings.
    - LLM generates action plan
    - Determines browser action needed
 
-3. **Agent** sends action via MCP:
+3. **Agent** sends action via MCP or BullMQ:
    ```python
+   # Option 1: Via MCP (HTTP)
    result = await mcp_client.call_tool(
        name="execute_action",
        arguments={
@@ -999,14 +126,24 @@ All events are sent as JSON strings.
            "params": {"index": 5}
        }
    )
+   
+   # Option 2: Via BullMQ (recommended for reliability)
+   await command_queue.add(
+       "click",
+       {
+           "room_name": room_name,
+           "index": 5
+       },
+       job_id=f"click_{room_name}_{int(time.time())}"
+   )
    ```
 
 4. **Browser Service** receives and executes:
    - Executes action
-   - Broadcasts events (action_started, action_completed)
+   - Broadcasts events (action_started, action_completed) via Redis Pub/Sub
    - Continues publishing video frames
 
-5. **Browser Service** broadcasts events via WebSocket:
+5. **Browser Service** broadcasts events via Redis Pub/Sub:
    - `action_completed`: Action succeeded
    - `page_navigation`: If navigation occurred
    - `page_load_complete`: When page finishes loading
@@ -1019,7 +156,7 @@ All events are sent as JSON strings.
 - ✅ Continuous video stream (10-15 FPS)
 - ✅ Real-time action execution
 - ✅ Vision analysis of results
-- ✅ Bidirectional communication via MCP
+- ✅ Bidirectional communication via MCP/BullMQ + Redis Pub/Sub
 
 ---
 
@@ -1028,7 +165,7 @@ All events are sent as JSON strings.
 **When:** User requests to pause or agent determines browser not needed temporarily
 
 **Flow:**
-1. **Agent** sends pause command via MCP
+1. **Agent** sends pause command via MCP or BullMQ
 2. **Browser Service** pauses video publishing (keeps browser alive)
 3. **Agent** detects video track removed and unsubscribes
 
@@ -1044,7 +181,7 @@ All events are sent as JSON strings.
 **When:** User requests browser interaction again
 
 **Flow:**
-1. **Agent** sends resume command via MCP
+1. **Agent** sends resume command via MCP or BullMQ
 2. **Browser Service** resumes video publishing
 3. **Agent** detects new video track and resubscribes
 
@@ -1060,7 +197,7 @@ All events are sent as JSON strings.
 **When:** User explicitly closes browser or agent determines browser no longer needed
 
 **Flow:**
-1. **Agent** sends close command via MCP
+1. **Agent** sends close command via MCP or BullMQ
 2. **Browser Service** closes browser and disconnects:
    - Stops video publishing
    - Unpublishes video track
@@ -1133,6 +270,21 @@ All events are sent as JSON strings.
 
 ---
 
+### Knowledge Retrieval Job Failures
+
+**Scenario:** Knowledge retrieval job fails (network error, timeout, etc.)
+
+**Recovery:**
+1. Job status updated to `failed`
+2. Error details stored in job registry
+3. Progress observer emits error event
+4. Agent can:
+   - Retry job with same parameters
+   - Resume from last successful page
+   - Cancel and start new job
+
+---
+
 ## Performance Optimization
 
 ### Frame Rate Management
@@ -1153,6 +305,14 @@ All events are sent as JSON strings.
 - Use efficient encoding (H.264)
 - Optimize frame conversion pipeline
 - Keep MCP calls asynchronous
+- Use Redis Pub/Sub for events (<5ms latency)
+
+### Command Processing
+
+- Use BullMQ for reliable command queuing
+- Batch commands when possible
+- Implement rate limiting to prevent overload
+- Use connection pooling for Redis
 
 ---
 
@@ -1172,56 +332,105 @@ All events are sent as JSON strings.
 - Handle authentication pages carefully
 - Don't stream passwords or sensitive form data
 
+### Domain Restrictions
+
+- Use `allowed_domains` to restrict navigation
+- Use `prohibited_domains` to block specific sites
+- Validate URLs before navigation
+- Log domain violations for audit
+
 ---
 
 ## Implementation Examples
 
-### Agent Side (MCP Client)
+### Agent Side (MCP Client with Redis Pub/Sub)
 
 ```python
 import httpx
-import websockets
+import asyncio
+from redis.asyncio import Redis
+from bullmq import Queue
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 class BrowserController:
     def __init__(self, mcp_server_url: str, room_name: str):
         self.mcp_url = mcp_server_url
         self.room_name = room_name
         self.session = None
-        self.websocket = None
+        self.redis = None
+        self.pubsub = None
+        self.command_queue = None
     
     async def connect(self):
-        """Connect to MCP server (HTTP and WebSocket)"""
+        """Connect to MCP server (HTTP), Redis Pub/Sub, and BullMQ"""
         # HTTP client for tool calls
         self.session = httpx.AsyncClient(
             base_url=self.mcp_url,
             timeout=30.0
         )
         
-        # WebSocket connection for events
-        ws_url = self.mcp_url.replace("http://", "ws://").replace("https://", "wss://")
-        self.websocket = await websockets.connect(
-            f"{ws_url}/mcp/events/{self.room_name}"
-        )
+        # Redis Pub/Sub for events
+        self.redis = Redis(host='localhost', port=6379)
+        self.pubsub = self.redis.pubsub()
+        
+        # BullMQ for commands
+        self.command_queue = Queue("browser_commands")
+        
+        # Subscribe to room's event channel
+        channel = f"browser:events:{self.room_name}"
+        await self.pubsub.subscribe(channel)
         
         # Start event listener
         asyncio.create_task(self._listen_for_events())
     
     async def _listen_for_events(self):
-        """Listen for events from browser service"""
+        """Listen for events from browser service via Redis Pub/Sub"""
         try:
-            async for message in self.websocket:
-                event = json.loads(message)
-                event_type = event.get("type")
-                
-                # Handle event
-                if event_type == "page_navigation":
-                    await self._on_page_navigation(event)
-                elif event_type == "action_error":
-                    await self._on_action_error(event)
-                # ... more handlers
+            async for message in self.pubsub.listen():
+                if message['type'] == 'message':
+                    event = json.loads(message['data'])
+                    event_type = event.get("type")
+                    
+                    # Handle event
+                    if event_type == "page_navigation":
+                        await self._on_page_navigation(event)
+                    elif event_type == "action_completed":
+                        await self._on_action_completed(event)
+                    elif event_type == "action_error":
+                        await self._on_action_error(event)
+                    elif event_type == "browser_error":
+                        await self._on_browser_error(event)
+                    # ... more handlers
         except Exception as e:
             logger.error(f"Error in event listener: {e}")
+    
+    async def _on_page_navigation(self, event):
+        """Handle page navigation event"""
+        url = event.get("url")
+        logger.info(f"Page navigated to: {url}")
+        # React to navigation (e.g., speak to user)
+    
+    async def _on_action_completed(self, event):
+        """Handle action completion event"""
+        action = event.get("action", {})
+        logger.info(f"Action completed: {action.get('action_type')}")
+        # React to completion
+    
+    async def _on_action_error(self, event):
+        """Handle action error event"""
+        error = event.get("error")
+        action = event.get("action", {})
+        logger.warning(f"Action failed: {action.get('action_type')} - {error}")
+        # React to error (e.g., retry, ask user)
+    
+    async def _on_browser_error(self, event):
+        """Handle browser error event"""
+        error = event.get("error")
+        logger.error(f"Browser error: {error}")
+        # React to browser error (e.g., restart session)
     
     async def call_tool(self, tool_name: str, arguments: dict):
         """Call MCP tool via HTTP"""
@@ -1234,21 +443,341 @@ class BrowserController:
         )
         return response.json()
     
+    async def send_command_via_bullmq(self, action_type: str, params: dict):
+        """Send command via BullMQ (recommended for reliability)"""
+        await self.command_queue.add(
+            action_type,
+            {
+                "room_name": self.room_name,
+                **params
+            },
+            {
+                "jobId": f"{action_type}_{self.room_name}_{int(time.time())}",
+                "removeOnComplete": True,
+                "attempts": 3
+            }
+        )
+    
     async def start_browser_session(self, **kwargs):
+        """Start browser session"""
         return await self.call_tool("start_browser_session", {
             "room_name": self.room_name,
             **kwargs
         })
     
-    async def execute_action(self, action_type: str, params: dict):
-        return await self.call_tool("execute_action", {
-            "room_name": self.room_name,
-            "action_type": action_type,
-            "params": params
+    async def execute_action(self, action_type: str, params: dict, use_bullmq: bool = True):
+        """Execute browser action"""
+        if use_bullmq:
+            # Use BullMQ for reliability
+            await self.send_command_via_bullmq(action_type, params)
+            return {"status": "queued"}
+        else:
+            # Use MCP HTTP for immediate execution
+            return await self.call_tool("execute_action", {
+                "room_name": self.room_name,
+                "action_type": action_type,
+                "params": params
+            })
+    
+    async def pause_browser_session(self):
+        """Pause browser session"""
+        return await self.call_tool("pause_browser_session", {
+            "room_name": self.room_name
+        })
+    
+    async def resume_browser_session(self):
+        """Resume browser session"""
+        return await self.call_tool("resume_browser_session", {
+            "room_name": self.room_name
+        })
+    
+    async def close_browser_session(self):
+        """Close browser session"""
+        return await self.call_tool("close_browser_session", {
+            "room_name": self.room_name
+        })
+    
+    async def get_browser_context(self):
+        """Get current browser context"""
+        return await self.call_tool("get_browser_context", {
+            "room_name": self.room_name
+        })
+    
+    async def get_screen_content(self):
+        """Get screen content for agent communication"""
+        return await self.call_tool("get_screen_content", {
+            "room_name": self.room_name
         })
 ```
 
 ---
 
-*Last Updated: 2025*
+### Knowledge Retrieval Coordination
+
+```python
+import asyncio
+from redis.asyncio import Redis
+import json
+
+class KnowledgeRetrievalCoordinator:
+    def __init__(self, api_url: str, job_id: str):
+        self.api_url = api_url
+        self.job_id = job_id
+        self.redis = Redis(host='localhost', port=6379)
+        self.pubsub = None
+    
+    async def start_exploration(self, start_url: str, **kwargs):
+        """Start knowledge retrieval and monitor progress"""
+        import httpx
+        
+        # Start exploration via REST API
+        async with httpx.AsyncClient(base_url=self.api_url) as client:
+            response = await client.post(
+                "/api/knowledge/explore/start",
+                json={
+                    "start_url": start_url,
+                    "job_id": self.job_id,
+                    **kwargs
+                }
+            )
+            result = response.json()
+            self.job_id = result.get("job_id", self.job_id)
+        
+        # Subscribe to progress updates
+        await self._subscribe_to_progress()
+        
+        return result
+    
+    async def _subscribe_to_progress(self):
+        """Subscribe to progress updates via Redis Pub/Sub"""
+        self.pubsub = self.redis.pubsub()
+        channel = f"exploration:{self.job_id}:progress"
+        await self.pubsub.subscribe(channel)
+        
+        # Start progress listener
+        asyncio.create_task(self._listen_to_progress())
+    
+    async def _listen_to_progress(self):
+        """Listen for progress updates"""
+        try:
+            async for message in self.pubsub.listen():
+                if message['type'] == 'message':
+                    progress = json.loads(message['data'])
+                    await self._on_progress(progress)
+        except Exception as e:
+            logger.error(f"Error in progress listener: {e}")
+    
+    async def _on_progress(self, progress: dict):
+        """Handle progress update"""
+        status = progress.get("status")
+        completed = progress.get("completed", 0)
+        queued = progress.get("queued", 0)
+        current_url = progress.get("current_url")
+        
+        logger.info(
+            f"Progress: {status} | "
+            f"Completed: {completed} | "
+            f"Queued: {queued} | "
+            f"Current: {current_url}"
+        )
+        
+        # React to progress (e.g., update UI, notify user)
+    
+    async def pause(self):
+        """Pause exploration"""
+        import httpx
+        async with httpx.AsyncClient(base_url=self.api_url) as client:
+            response = await client.post(
+                "/api/knowledge/explore/pause",
+                json={"job_id": self.job_id}
+            )
+            return response.json()
+    
+    async def resume(self):
+        """Resume exploration"""
+        import httpx
+        async with httpx.AsyncClient(base_url=self.api_url) as client:
+            response = await client.post(
+                "/api/knowledge/explore/resume",
+                json={"job_id": self.job_id}
+            )
+            return response.json()
+    
+    async def cancel(self):
+        """Cancel exploration"""
+        import httpx
+        async with httpx.AsyncClient(base_url=self.api_url) as client:
+            response = await client.post(
+                "/api/knowledge/explore/cancel",
+                json={"job_id": self.job_id}
+            )
+            return response.json()
+    
+    async def get_results(self, partial: bool = False):
+        """Get exploration results"""
+        import httpx
+        async with httpx.AsyncClient(base_url=self.api_url) as client:
+            response = await client.get(
+                f"/api/knowledge/explore/results/{self.job_id}",
+                params={"partial": partial}
+            )
+            return response.json()
+```
+
+---
+
+### Complete Coordination Example
+
+```python
+import asyncio
+from browser_controller import BrowserController
+from knowledge_retrieval_coordinator import KnowledgeRetrievalCoordinator
+
+async def coordinate_browser_and_knowledge():
+    """Example of coordinating browser automation and knowledge retrieval"""
+    
+    # Initialize browser controller
+    browser = BrowserController(
+        mcp_server_url="http://localhost:8000",
+        room_name="demo-room"
+    )
+    await browser.connect()
+    
+    # Start browser session
+    await browser.start_browser_session(
+        initial_url="https://example.com"
+    )
+    
+    # Execute some actions
+    await browser.execute_action("navigate", {"url": "https://example.com/page1"})
+    await browser.execute_action("click", {"index": 0})
+    await browser.execute_action("type", {"text": "Hello", "index": 0})
+    
+    # Start knowledge retrieval for the same site
+    knowledge = KnowledgeRetrievalCoordinator(
+        api_url="http://localhost:8000",
+        job_id=None  # Auto-generated
+    )
+    
+    result = await knowledge.start_exploration(
+        start_url="https://example.com",
+        max_pages=50,
+        max_depth=3,
+        strategy="BFS"
+    )
+    
+    # Monitor both browser and knowledge retrieval
+    # (progress updates come via Redis Pub/Sub)
+    
+    # Pause knowledge retrieval if needed
+    await knowledge.pause()
+    
+    # Continue browser automation
+    await browser.execute_action("scroll", {"direction": "down", "amount": 500})
+    
+    # Resume knowledge retrieval
+    await knowledge.resume()
+    
+    # Get knowledge results when done
+    results = await knowledge.get_results(partial=True)
+    print(f"Pages stored: {results['results']['pages_stored']}")
+    
+    # Close browser session
+    await browser.close_browser_session()
+```
+
+---
+
+## Best Practices
+
+### 1. Use BullMQ for Commands
+
+**✅ DO:**
+```python
+# Reliable command queuing
+await command_queue.add("navigate", {...}, {"attempts": 3})
+```
+
+**❌ DON'T:**
+```python
+# Direct HTTP calls for critical commands (no retry, no persistence)
+await http_client.post("/mcp/tools/call", ...)
+```
+
+### 2. Use Redis Pub/Sub for Events
+
+**✅ DO:**
+```python
+# Subscribe to Redis Pub/Sub for real-time events
+await pubsub.subscribe(f"browser:events:{room_name}")
+```
+
+**❌ DON'T:**
+```python
+# Poll HTTP endpoints for events (high latency, inefficient)
+while True:
+    events = await http_client.get("/events")
+    await asyncio.sleep(1)  # Polling delay
+```
+
+### 3. Connection Pooling
+
+**✅ DO:**
+```python
+# Reuse Redis connection
+_redis = Redis(host='localhost', port=6379)
+await _redis.publish(...)
+```
+
+**❌ DON'T:**
+```python
+# New connection every time
+redis = Redis()  # Creates new connection - BAD!
+await redis.publish(...)
+```
+
+### 4. Error Handling
+
+**✅ DO:**
+```python
+try:
+    result = await browser.execute_action("click", {"index": 0})
+    if not result.get("success"):
+        # Handle error
+        await handle_action_error(result)
+except Exception as e:
+    logger.error(f"Action failed: {e}")
+    # Retry or notify user
+```
+
+**❌ DON'T:**
+```python
+# Ignore errors
+await browser.execute_action("click", {"index": 0})
+# No error handling - BAD!
+```
+
+### 5. Session Lifecycle Management
+
+**✅ DO:**
+```python
+# Always close sessions
+try:
+    await browser.start_browser_session(...)
+    # ... use browser ...
+finally:
+    await browser.close_browser_session()  # Always cleanup
+```
+
+**❌ DON'T:**
+```python
+# Leave sessions open
+await browser.start_browser_session(...)
+# ... use browser ...
+# Forgot to close - BAD! (zombie browser processes)
+```
+
+---
+
+*Last Updated: 2025-01-12*
 *Version: 1.0.0*
