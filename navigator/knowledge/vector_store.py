@@ -1,11 +1,14 @@
 """
 Vector Store for Knowledge Retrieval
 
-Stores embeddings for semantic search (with in-memory fallback).
+Stores embeddings for semantic search in MongoDB (with in-memory fallback).
+All collections use the 'brwsr_auto_svc_' prefix.
 """
 
 import logging
 from typing import Any
+
+from navigator.storage.mongodb import get_collection
 
 logger = logging.getLogger(__name__)
 
@@ -15,57 +18,24 @@ class VectorStore:
 	Vector store for storing and searching embeddings.
 	
 	Supports:
-	- Vector database storage (production - Pinecone, Weaviate, Qdrant, Chroma)
-	- In-memory storage (development/testing)
+	- MongoDB storage (production)
+	- In-memory storage (development/testing fallback)
 	- Embedding storage and retrieval
 	- Similarity search
 	"""
 	
-	def __init__(self, use_vector_db: bool = False, vector_db_config: dict[str, Any] | None = None):
+	def __init__(self, use_mongodb: bool = True):
 		"""
 		Initialize vector store.
 		
 		Args:
-			use_vector_db: Whether to use vector database (False for in-memory storage)
-			vector_db_config: Vector database configuration dict (type, api_key, endpoint, etc.)
+			use_mongodb: Whether to use MongoDB (True by default, falls back to in-memory if unavailable)
 		"""
-		self.use_vector_db = use_vector_db
-		self.vector_db_config = vector_db_config or {}
+		self.use_mongodb = use_mongodb
+		self.embedding_dimension = 128  # Default dimension (matches SemanticAnalyzer)
 		
-		if use_vector_db:
-			try:
-				# Try to initialize vector database
-				# Note: For production, integrate with Pinecone, Weaviate, Qdrant, or Chroma
-				vector_db_type = self.vector_db_config.get('type', 'pinecone')
-				
-				if vector_db_type == 'pinecone':
-					# Placeholder for Pinecone integration
-					# from pinecone import Pinecone, ServerlessSpec
-					# self.pinecone = Pinecone(api_key=vector_db_config.get('api_key'))
-					# self.index = self.pinecone.Index(vector_db_config.get('index_name', 'knowledge'))
-					logger.warning("Pinecone integration not implemented, falling back to in-memory storage")
-					self.use_vector_db = False
-					self._init_in_memory()
-				elif vector_db_type == 'chroma':
-					# Placeholder for Chroma integration
-					# import chromadb
-					# self.chroma_client = chromadb.Client()
-					# self.collection = self.chroma_client.get_or_create_collection('knowledge')
-					logger.warning("Chroma integration not implemented, falling back to in-memory storage")
-					self.use_vector_db = False
-					self._init_in_memory()
-				else:
-					logger.warning(f"Vector database type '{vector_db_type}' not supported, falling back to in-memory storage")
-					self.use_vector_db = False
-					self._init_in_memory()
-			except ImportError:
-				logger.warning("Vector database libraries not available, falling back to in-memory storage")
-				self.use_vector_db = False
-				self._init_in_memory()
-			except Exception as e:
-				logger.error(f"Failed to initialize vector database: {e}, falling back to in-memory storage")
-				self.use_vector_db = False
-				self._init_in_memory()
+		if use_mongodb:
+			logger.info("VectorStore initialized with MongoDB")
 		else:
 			self._init_in_memory()
 			logger.debug("VectorStore initialized with in-memory storage")
@@ -73,7 +43,6 @@ class VectorStore:
 	def _init_in_memory(self) -> None:
 		"""Initialize in-memory storage."""
 		self.embeddings: dict[str, dict[str, Any]] = {}  # id -> {embedding, metadata}
-		self.embedding_dimension = 128  # Default dimension (matches SemanticAnalyzer)
 	
 	def _cosine_similarity(self, vec1: list[float], vec2: list[float]) -> float:
 		"""
@@ -108,26 +77,35 @@ class VectorStore:
 			metadata: Optional metadata dictionary
 		"""
 		metadata = metadata or {}
+		embedding_document = {
+			'id': id,
+			'embedding': embedding,
+			'metadata': metadata,
+		}
 		
-		if self.use_vector_db:
+		if self.use_mongodb:
 			try:
-				# For production: use vector database API
-				# Example for Pinecone:
-				# self.index.upsert(vectors=[(id, embedding, metadata)])
-				logger.debug(f"Stored embedding in vector database: {id}")
-				# Fallback to in-memory for now
-				self.embeddings[id] = {
-					'embedding': embedding,
-					'metadata': metadata,
-				}
+				collection = await get_collection('embeddings')
+				if collection is None:
+					# Fallback to in-memory
+					self.embeddings[id] = embedding_document
+					logger.debug(f"Stored embedding in-memory (MongoDB unavailable): {id}")
+					return
+				
+				# Upsert by id
+				await collection.update_one(
+					{'id': id},
+					{'$set': embedding_document},
+					upsert=True
+				)
+				logger.debug(f"Stored embedding in MongoDB: {id}")
 			except Exception as e:
-				logger.error(f"Failed to store embedding in vector database: {e}")
-				raise
+				logger.error(f"Failed to store embedding in MongoDB: {e}")
+				# Fallback to in-memory
+				self.embeddings[id] = embedding_document
+				logger.debug(f"Stored embedding in-memory (fallback): {id}")
 		else:
-			self.embeddings[id] = {
-				'embedding': embedding,
-				'metadata': metadata,
-			}
+			self.embeddings[id] = embedding_document
 			logger.debug(f"Stored embedding in-memory: {id}")
 	
 	async def search_similar(self, query_embedding: list[float], top_k: int = 5, metadata_filter: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -142,43 +120,63 @@ class VectorStore:
 		Returns:
 			List of similar embeddings with scores (sorted by similarity)
 		"""
-		if self.use_vector_db:
+		if self.use_mongodb:
 			try:
-				# For production: use vector database similarity search
-				# Example for Pinecone:
-				# results = self.index.query(vector=query_embedding, top_k=top_k, filter=metadata_filter, include_metadata=True)
-				# return [{'id': r.id, 'score': r.score, 'metadata': r.metadata} for r in results.matches]
-				# Fallback to in-memory for now
-				pass
+				collection = await get_collection('embeddings')
+				if collection is None:
+					# Fallback to in-memory search
+					return self._search_in_memory(query_embedding, top_k, metadata_filter)
+				
+				# Get all embeddings (for now - can be optimized with vector search indexes later)
+				cursor = collection.find(metadata_filter or {})
+				results = []
+				
+				async for doc in cursor:
+					embedding = doc.get('embedding', [])
+					if not embedding:
+						continue
+					
+					similarity = self._cosine_similarity(query_embedding, embedding)
+					results.append({
+						'id': doc.get('id'),
+						'score': similarity,
+						'metadata': doc.get('metadata', {}),
+					})
+				
+				# Sort by similarity (descending) and return top_k
+				results.sort(key=lambda x: x['score'], reverse=True)
+				return results[:top_k]
 			except Exception as e:
-				logger.error(f"Failed to search embeddings in vector database: {e}")
-				return []
+				logger.error(f"Failed to search embeddings in MongoDB: {e}")
+				# Fallback to in-memory
+				return self._search_in_memory(query_embedding, top_k, metadata_filter)
+		else:
+			return self._search_in_memory(query_embedding, top_k, metadata_filter)
+	
+	def _search_in_memory(self, query_embedding: list[float], top_k: int, metadata_filter: dict[str, Any] | None) -> list[dict[str, Any]]:
+		"""Search in-memory embeddings."""
+		results = []
 		
-		# In-memory similarity search using cosine similarity
-		results: list[dict[str, Any]] = []
-		
-		for embedding_id, embedding_data in self.embeddings.items():
-			embedding = embedding_data['embedding']
-			metadata = embedding_data['metadata']
-			
+		for id, data in self.embeddings.items():
 			# Apply metadata filter if provided
 			if metadata_filter:
+				metadata = data.get('metadata', {})
 				if not all(metadata.get(k) == v for k, v in metadata_filter.items()):
 					continue
 			
-			# Calculate cosine similarity
-			similarity = self._cosine_similarity(query_embedding, embedding)
+			embedding = data.get('embedding', [])
+			if not embedding:
+				continue
 			
+			similarity = self._cosine_similarity(query_embedding, embedding)
 			results.append({
-				'id': embedding_id,
+				'id': id,
 				'score': similarity,
-				'metadata': metadata,
+				'metadata': data.get('metadata', {}),
 			})
 		
-		# Sort by similarity (descending)
+		# Sort by similarity (descending) and return top_k
 		results.sort(key=lambda x: x['score'], reverse=True)
-		
-		# Return top_k results
 		return results[:top_k]
 	
 	async def get_embedding(self, id: str) -> dict[str, Any] | None:
@@ -186,22 +184,27 @@ class VectorStore:
 		Get an embedding by ID.
 		
 		Args:
-			id: Embedding identifier
+			id: Embedding ID
 		
 		Returns:
 			Embedding data dictionary or None if not found
 		"""
-		if self.use_vector_db:
+		if self.use_mongodb:
 			try:
-				# For production: use vector database API
-				# Example for Pinecone:
-				# result = self.index.fetch(ids=[id])
-				# return result.vectors.get(id)
-				# Fallback to in-memory for now
-				return self.embeddings.get(id)
-			except Exception as e:
-				logger.error(f"Failed to get embedding from vector database: {e}")
+				collection = await get_collection('embeddings')
+				if collection is None:
+					# Fallback to in-memory
+					return self.embeddings.get(id)
+				
+				doc = await collection.find_one({'id': id})
+				if doc:
+					doc.pop('_id', None)  # Remove MongoDB _id
+					return doc
 				return None
+			except Exception as e:
+				logger.error(f"Failed to get embedding from MongoDB: {e}")
+				# Fallback to in-memory
+				return self.embeddings.get(id)
 		else:
 			return self.embeddings.get(id)
 	
@@ -210,71 +213,94 @@ class VectorStore:
 		Update an existing embedding.
 		
 		Args:
-			id: Embedding identifier
+			id: Embedding ID
 			embedding: New embedding vector (optional)
-			metadata: New metadata (optional, merged with existing)
+			metadata: New metadata (optional)
 		"""
-		if self.use_vector_db:
+		update_data: dict[str, Any] = {}
+		if embedding is not None:
+			update_data['embedding'] = embedding
+		if metadata is not None:
+			update_data['metadata'] = metadata
+		
+		if not update_data:
+			return
+		
+		if self.use_mongodb:
 			try:
-				# For production: use vector database API
-				# Example for Pinecone:
-				# self.index.upsert(vectors=[(id, embedding, metadata)])
-				logger.debug(f"Updated embedding in vector database: {id}")
-				# Fallback to in-memory for now
+				collection = await get_collection('embeddings')
+				if collection is None:
+					# Fallback to in-memory
+					if id in self.embeddings:
+						if embedding is not None:
+							self.embeddings[id]['embedding'] = embedding
+						if metadata is not None:
+							self.embeddings[id]['metadata'] = metadata
+					logger.debug(f"Updated embedding in-memory (MongoDB unavailable): {id}")
+					return
+				
+				await collection.update_one(
+					{'id': id},
+					{'$set': update_data}
+				)
+				logger.debug(f"Updated embedding in MongoDB: {id}")
+			except Exception as e:
+				logger.error(f"Failed to update embedding in MongoDB: {e}")
+				# Fallback to in-memory
 				if id in self.embeddings:
 					if embedding is not None:
 						self.embeddings[id]['embedding'] = embedding
 					if metadata is not None:
-						self.embeddings[id]['metadata'].update(metadata)
-			except Exception as e:
-				logger.error(f"Failed to update embedding in vector database: {e}")
-				raise
+						self.embeddings[id]['metadata'] = metadata
+				logger.debug(f"Updated embedding in-memory (fallback): {id}")
 		else:
 			if id in self.embeddings:
 				if embedding is not None:
 					self.embeddings[id]['embedding'] = embedding
 				if metadata is not None:
-					self.embeddings[id]['metadata'].update(metadata)
-				logger.debug(f"Updated embedding in-memory: {id}")
+					self.embeddings[id]['metadata'] = metadata
+			logger.debug(f"Updated embedding in-memory: {id}")
 	
 	async def delete_embedding(self, id: str) -> None:
 		"""
 		Delete an embedding.
 		
 		Args:
-			id: Embedding identifier
+			id: Embedding ID
 		"""
-		if self.use_vector_db:
+		if self.use_mongodb:
 			try:
-				# For production: use vector database API
-				# Example for Pinecone:
-				# self.index.delete(ids=[id])
-				logger.debug(f"Deleted embedding from vector database: {id}")
-				# Fallback to in-memory for now
-				if id in self.embeddings:
-					del self.embeddings[id]
+				collection = await get_collection('embeddings')
+				if collection is None:
+					# Fallback to in-memory
+					self.embeddings.pop(id, None)
+					logger.debug(f"Deleted embedding from in-memory (MongoDB unavailable): {id}")
+					return
+				
+				await collection.delete_one({'id': id})
+				logger.debug(f"Deleted embedding from MongoDB: {id}")
 			except Exception as e:
-				logger.error(f"Failed to delete embedding from vector database: {e}")
-				raise
+				logger.error(f"Failed to delete embedding from MongoDB: {e}")
+				# Fallback to in-memory
+				self.embeddings.pop(id, None)
+				logger.debug(f"Deleted embedding from in-memory (fallback): {id}")
 		else:
-			if id in self.embeddings:
-				del self.embeddings[id]
-				logger.debug(f"Deleted embedding from in-memory storage: {id}")
+			self.embeddings.pop(id, None)
+			logger.debug(f"Deleted embedding from in-memory: {id}")
 	
 	async def clear(self) -> None:
 		"""
 		Clear all embeddings (for testing).
 		"""
-		if self.use_vector_db:
+		if self.use_mongodb:
 			try:
-				# For production: use vector database API
-				# Example for Pinecone:
-				# self.index.delete(delete_all=True)
-				logger.debug("Cleared vector database")
-				# Fallback to in-memory for now
-				self.embeddings.clear()
+				collection = await get_collection('embeddings')
+				if collection:
+					await collection.delete_many({})
+				logger.debug("Cleared MongoDB embeddings collection")
 			except Exception as e:
-				logger.error(f"Failed to clear vector database: {e}")
-		else:
-			self.embeddings.clear()
-			logger.debug("Cleared in-memory storage")
+				logger.error(f"Failed to clear MongoDB embeddings: {e}")
+		
+		# Also clear in-memory storage
+		self.embeddings.clear()
+		logger.debug("Cleared in-memory embeddings")

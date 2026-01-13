@@ -75,7 +75,7 @@ class LiveKitStreamingService:
 		self.livekit_api_key = livekit_api_key
 		self.livekit_api_secret = livekit_api_secret
 		self.livekit_token = livekit_token
-		self.participant_identity = participant_identity or 'browser-agent'
+		self.participant_identity = participant_identity or 'browser-automation'
 		self.participant_name = participant_name or 'Browser Automation Agent'
 		self.width = width
 		self.height = height
@@ -160,9 +160,16 @@ class LiveKitStreamingService:
 
 	async def disconnect(self) -> None:
 		"""Disconnect from LiveKit room."""
-		await self.stop_publishing()
+		try:
+			await self.stop_publishing()
+		except Exception as e:
+			logger.debug(f'Error stopping publishing during disconnect: {e}')
+		
 		if self.room:
-			await self.room.disconnect()
+			try:
+				await self.room.disconnect()
+			except Exception as e:
+				logger.debug(f'Error disconnecting from room (may be already closed): {e}')
 			self.room = None
 			logger.info('Disconnected from LiveKit room')
 
@@ -224,14 +231,21 @@ class LiveKitStreamingService:
 		if self.capture_task:
 			self.capture_task.cancel()
 			try:
-				await self.capture_task
-			except asyncio.CancelledError:
+				# Wait for task to complete, but don't wait forever
+				await asyncio.wait_for(self.capture_task, timeout=2.0)
+			except (asyncio.CancelledError, asyncio.TimeoutError):
 				pass
+			except Exception as e:
+				logger.debug(f'Error waiting for capture task: {e}')
 			self.capture_task = None
 
-		# Unpublish track
+		# Unpublish track (handle gracefully if room/participant is already closed)
 		if self.video_publication and self.room:
-			await self.room.local_participant.unpublish_track(self.video_publication.sid)
+			try:
+				if self.room.local_participant:
+					await self.room.local_participant.unpublish_track(self.video_publication.sid)
+			except Exception as e:
+				logger.debug(f'Error unpublishing track (may be already closed): {e}')
 			self.video_publication = None
 
 		# Clean up track and source
@@ -239,7 +253,10 @@ class LiveKitStreamingService:
 		if self.video_track:
 			self.video_track = None
 		if self.video_source:
-			await self.video_source.aclose()
+			try:
+				await self.video_source.aclose()
+			except Exception as e:
+				logger.debug(f'Error closing video source: {e}')
 			self.video_source = None
 
 		logger.info('Video publishing stopped')
@@ -252,8 +269,7 @@ class LiveKitStreamingService:
 
 		while self._is_active:
 			try:
-				# Capture screenshot from browser
-				logger.debug('[LiveKit] Capturing screenshot from browser...')
+				# Capture screenshot from browser (no debug log - too frequent)
 				screenshot_bytes = await browser_session.take_screenshot(
 					path=None,
 					full_page=False,
@@ -261,14 +277,14 @@ class LiveKitStreamingService:
 				)
 
 				if screenshot_bytes:
-					logger.debug(f'[LiveKit] Screenshot captured ({len(screenshot_bytes)} bytes)')
 					# Convert to video frame
 					frame = self._screenshot_to_video_frame(screenshot_bytes)
 					if frame and self.video_source:
 						self.video_source.capture_frame(frame)
 						frame_count += 1
-						if frame_count % 30 == 0:  # Log every 30 frames
-							logger.debug(f'[LiveKit] Published {frame_count} frames')
+						# Log every 150 frames (~5 seconds at 30fps) instead of every 30
+						if frame_count % 150 == 0:
+							logger.info(f'[LiveKit] Published {frame_count} frames')
 					else:
 						logger.warning('[LiveKit] Failed to convert screenshot to video frame')
 				else:
@@ -277,9 +293,21 @@ class LiveKitStreamingService:
 				await asyncio.sleep(frame_interval)
 
 			except asyncio.CancelledError:
+				logger.debug('[LiveKit] Capture loop cancelled')
 				break
 			except Exception as e:
-				logger.error(f'Error capturing frame: {e}', exc_info=True)
+				# Check if event loop is closed (happens during shutdown)
+				try:
+					loop = asyncio.get_running_loop()
+					if loop.is_closed():
+						logger.debug('[LiveKit] Event loop closed, stopping capture')
+						break
+				except RuntimeError:
+					# No running loop - we're shutting down
+					logger.debug('[LiveKit] No running event loop, stopping capture')
+					break
+				
+				logger.error(f'[LiveKit] Error capturing frame: {e}', exc_info=True)
 				await asyncio.sleep(0.1)
 
 	def _screenshot_to_video_frame(self, screenshot_bytes: bytes) -> rtc.VideoFrame | None:
@@ -292,24 +320,18 @@ class LiveKitStreamingService:
 			VideoFrame or None if conversion fails
 		"""
 		try:
-			logger.debug(f'[LiveKit] Converting screenshot to video frame ({len(screenshot_bytes)} bytes)')
-			
-			# Load image
+			# Load image (no debug logs - too frequent at 30fps)
 			img = Image.open(io.BytesIO(screenshot_bytes))
 			original_size = img.size
-			logger.debug(f'[LiveKit] Image loaded: {original_size[0]}x{original_size[1]}')
 			
 			img = img.convert('RGBA')
-			logger.debug('[LiveKit] Image converted to RGBA')
 
 			# Resize if needed
 			if img.size != (self.width, self.height):
-				logger.debug(f'[LiveKit] Resizing image from {img.size} to {self.width}x{self.height}')
 				img = img.resize((self.width, self.height), Image.Resampling.LANCZOS)
 
 			# Get RGBA pixel data - LiveKit handles encoding conversion automatically
 			rgba_data = img.tobytes('raw', 'RGBA')
-			logger.debug(f'[LiveKit] RGBA data extracted ({len(rgba_data)} bytes)')
 
 			# Create video frame with RGBA buffer type
 			# LiveKit will automatically convert between buffer encodings as needed
@@ -319,7 +341,6 @@ class LiveKitStreamingService:
 				rtc.VideoBufferType.RGBA,
 				rgba_data,
 			)
-			logger.debug(f'[LiveKit] VideoFrame created: {self.width}x{self.height}, type=RGBA')
 
 			return frame
 

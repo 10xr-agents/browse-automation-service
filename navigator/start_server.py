@@ -6,7 +6,13 @@ The MCP server runs separately via stdio when connected to MCP clients.
 """
 
 import logging
+import os
 import sys
+
+# macOS fork safety: Disable Objective-C runtime fork safety check
+# This prevents crashes when spawning subprocesses on macOS
+if sys.platform == 'darwin':
+	os.environ.setdefault('OBJC_DISABLE_INITIALIZE_FORK_SAFETY', 'YES')
 
 from dotenv import load_dotenv
 
@@ -16,70 +22,22 @@ except ImportError:
 	print('Error: uvicorn not installed. Install with: uv pip install uvicorn')
 	sys.exit(1)
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from .env.local first, then .env
+# .env.local takes precedence (for local development overrides)
+load_dotenv(dotenv_path='.env.local', override=False)  # Load .env.local first
+load_dotenv(override=True)  # Then load .env (or system env) with override
 
 from navigator.server.websocket import get_app
 
-# Start BullMQ worker for knowledge retrieval (if available)
-async def start_knowledge_worker():
-	"""Start BullMQ worker for knowledge retrieval jobs."""
-	try:
-		from navigator.knowledge.job_queue import start_knowledge_worker, get_redis_client
-		from browser_use import BrowserSession
-		from browser_use.browser.profile import BrowserProfile
-		from navigator.knowledge.pipeline import KnowledgePipeline
-		from navigator.knowledge.progress_observer import (
-			CompositeProgressObserver,
-			LoggingProgressObserver,
-		)
-		
-		# Check Redis availability
-		redis_client = await get_redis_client()
-		if redis_client is None:
-			logger.info("Redis not available, BullMQ worker not started")
-			return
-		
-		# Create pipeline factory
-		def create_pipeline_factory():
-			observers = [LoggingProgressObserver()]
-			
-			try:
-				import redis.asyncio as redis
-				from navigator.knowledge.progress_observer import RedisProgressObserver
-				redis_observer = RedisProgressObserver(redis_client=redis_client)
-				observers.append(redis_observer)
-			except Exception:
-				pass
-			
-			progress_observer = CompositeProgressObserver(observers)
-			
-			async def create_pipeline():
-				profile = BrowserProfile(headless=True, user_data_dir=None, keep_alive=True)
-				browser_session = BrowserSession(browser_profile=profile)
-				await browser_session.start()
-				await browser_session.attach_all_watchdogs()
-				
-				return KnowledgePipeline(
-					browser_session=browser_session,
-					progress_observer=progress_observer,
-				)
-			
-			return create_pipeline
-		
-		# Start worker
-		worker = await start_knowledge_worker(create_pipeline_factory())
-		if worker:
-			logger.info("✅ BullMQ knowledge retrieval worker started")
-	except ImportError:
-		logger.debug("BullMQ not available, worker not started")
-	except Exception as e:
-		logger.warning(f"Failed to start BullMQ worker: {e}")
+# Note: RQ workers run as separate processes (not inline with the API server)
+# Start RQ worker with: rq worker knowledge-retrieval
+# See navigator/server/websocket.py for RQ setup information
 
 # Configure logging with DEBUG level for comprehensive debugging
 logging.basicConfig(
 	level=logging.DEBUG,
 	format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+	force=True,  # Override any existing configuration
 )
 logger = logging.getLogger(__name__)
 
@@ -87,6 +45,31 @@ logger = logging.getLogger(__name__)
 logging.getLogger('uvicorn').setLevel(logging.INFO)
 logging.getLogger('uvicorn.access').setLevel(logging.INFO)
 logging.getLogger('fastapi').setLevel(logging.INFO)
+
+# Ensure knowledge extraction loggers are at INFO level
+logging.getLogger('navigator.knowledge').setLevel(logging.INFO)
+logging.getLogger('navigator.knowledge.pipeline').setLevel(logging.INFO)
+logging.getLogger('navigator.knowledge.job_queue').setLevel(logging.INFO)
+logging.getLogger('navigator.knowledge.rest_api').setLevel(logging.INFO)
+logging.getLogger('navigator.knowledge.exploration_engine').setLevel(logging.INFO)
+
+# Configure MongoDB loggers - only show errors by default
+# Set MONGODB_DEBUG_LOGS=true to enable debug logging for MongoDB
+mongodb_debug = os.getenv('MONGODB_DEBUG_LOGS', 'false').lower() == 'true'
+mongodb_log_level = logging.DEBUG if mongodb_debug else logging.ERROR
+
+# Motor and pymongo loggers
+logging.getLogger('motor').setLevel(mongodb_log_level)
+logging.getLogger('motor.motor_asyncio').setLevel(mongodb_log_level)
+logging.getLogger('pymongo').setLevel(mongodb_log_level)
+logging.getLogger('pymongo.serverSelection').setLevel(mongodb_log_level)
+logging.getLogger('pymongo.connection').setLevel(mongodb_log_level)
+logging.getLogger('pymongo.network').setLevel(mongodb_log_level)
+logging.getLogger('pymongo.topology').setLevel(mongodb_log_level)
+logging.getLogger('pymongo.pool').setLevel(mongodb_log_level)
+
+# Our MongoDB utility logger - keep at INFO for connection status
+logging.getLogger('navigator.storage.mongodb').setLevel(logging.INFO)
 
 if __name__ == '__main__':
 	logger.info('=' * 70)
@@ -97,24 +80,41 @@ if __name__ == '__main__':
 	logger.info('Knowledge API: http://localhost:8000/api/knowledge/explore/start')
 	logger.info('=' * 70)
 	
+	# Verify required environment variables before starting
+	required_vars = {
+		'REDIS_URL': os.getenv('REDIS_URL'),
+		'MONGODB_URI': os.getenv('MONGODB_URI') or os.getenv('MONGODB_URL'),
+	}
+	
+	missing_vars = [var for var, value in required_vars.items() if not value]
+	if missing_vars:
+		logger.error('=' * 70)
+		logger.error('❌ Missing required environment variables:')
+		for var in missing_vars:
+			logger.error(f'   - {var}')
+		logger.error('   Please set these in your .env.local file')
+		logger.error('=' * 70)
+		sys.exit(1)
+	
+	logger.info('✅ Required environment variables found')
+	logger.info('=' * 70)
+	
 	app = get_app()
 	
-	# Start BullMQ worker in background
-	import asyncio
-	try:
-		loop = asyncio.get_event_loop()
-		if loop.is_running():
-			asyncio.create_task(start_knowledge_worker())
-		else:
-			loop.run_until_complete(start_knowledge_worker())
-	except RuntimeError:
-		# No event loop, will start when uvicorn starts
-		pass
+	# RQ workers run as separate processes (not started by FastAPI)
+	# Start RQ worker with: rq worker knowledge-retrieval
+	# Or use: uv run python navigator/knowledge/worker.py
+	
+	logger.info('Starting uvicorn server...')
+	logger.info('   RQ workers run as separate processes')
+	logger.info('   Start RQ worker with: rq worker knowledge-retrieval')
+	logger.info('=' * 70)
 	
 	# Run with uvicorn
+	# Note: We configure logging above, so we use log_config=None to avoid uvicorn overriding it
 	uvicorn.run(
 		app,
 		host='0.0.0.0',
 		port=8000,
-		log_level='info',
+		log_config=None,  # Use our logging configuration instead of uvicorn's default
 	)

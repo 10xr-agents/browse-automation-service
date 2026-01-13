@@ -401,35 +401,81 @@ class BrowserSessionManager:
 			WaitActionCommand,
 		)
 
-		# Map string action type to ActionType enum
-		action_type_map = {
+		# Map string action type to ActionType enum (for core actions) or string (for extended actions)
+		action_type_map: dict[str, ActionType | str] = {
+			# Core navigation actions
 			'navigate': ActionType.NAVIGATE,
 			'click': ActionType.CLICK,
 			'type': ActionType.TYPE,
 			'scroll': ActionType.SCROLL,
 			'wait': ActionType.WAIT,
 			'go_back': ActionType.GO_BACK,
+			'go_forward': ActionType.GO_FORWARD,
 			'refresh': ActionType.REFRESH,
 			'send_keys': ActionType.SEND_KEYS,
+			# Extended actions (use string values directly, ActionDispatcher handles them)
+			'right_click': 'right_click',
+			'double_click': 'double_click',
+			'hover': 'hover',
+			'drag_drop': 'drag_drop',
+			'type_slowly': 'type_slowly',
+			'select_all': 'select_all',
+			'copy': 'copy',
+			'paste': 'paste',
+			'cut': 'cut',
+			'clear': 'clear',
+			'upload_file': ActionType.UPLOAD_FILE,
+			'select_dropdown': 'select_dropdown',
+			'fill_form': 'fill_form',
+			'select_multiple': 'select_multiple',
+			'submit_form': 'submit_form',
+			'reset_form': 'reset_form',
+			'play_video': 'play_video',
+			'pause_video': 'pause_video',
+			'seek_video': 'seek_video',
+			'adjust_volume': 'adjust_volume',
+			'toggle_fullscreen': 'toggle_fullscreen',
+			'toggle_mute': 'toggle_mute',
+			'take_screenshot': 'take_screenshot',
+			'keyboard_shortcut': 'keyboard_shortcut',
+			'multi_select': 'multi_select',
+			'highlight_element': 'highlight_element',
+			'zoom_in': 'zoom_in',
+			'zoom_out': 'zoom_out',
+			'zoom_reset': 'zoom_reset',
+			'download_file': 'download_file',
+			'presentation_mode': 'presentation_mode',
+			'show_pointer': 'show_pointer',
+			'animate_scroll': 'animate_scroll',
+			'highlight_region': 'highlight_region',
+			'draw_on_page': 'draw_on_page',
+			'focus_element': 'focus_element',
 		}
 
-		action_enum = action_type_map.get(action_type)
-		if not action_enum:
+		action_type_value = action_type_map.get(action_type)
+		if not action_type_value:
 			return {'success': False, 'error': f'Unknown action_type: {action_type}'}
 
 		# Create action command
-		if action_enum == ActionType.NAVIGATE:
-			action = NavigateActionCommand(params=params)
-		elif action_enum == ActionType.CLICK:
-			action = ClickActionCommand(params=params)
-		elif action_enum == ActionType.TYPE:
-			action = TypeActionCommand(params=params)
-		elif action_enum == ActionType.SCROLL:
-			action = ScrollActionCommand(params=params)
-		elif action_enum == ActionType.WAIT:
-			action = WaitActionCommand(params=params)
+		# For core actions with specific command classes, use them; otherwise use generic ActionCommand
+		if isinstance(action_type_value, ActionType):
+			if action_type_value == ActionType.NAVIGATE:
+				action = NavigateActionCommand(params=params)
+			elif action_type_value == ActionType.CLICK:
+				action = ClickActionCommand(params=params)
+			elif action_type_value == ActionType.TYPE:
+				action = TypeActionCommand(params=params)
+			elif action_type_value == ActionType.SCROLL:
+				action = ScrollActionCommand(params=params)
+			elif action_type_value == ActionType.WAIT:
+				action = WaitActionCommand(params=params)
+			else:
+				# Other enum values (go_back, go_forward, refresh, send_keys, upload_file)
+				action = ActionCommand(action_type=action_type_value, params=params)
 		else:
-			action = ActionCommand(action_type=action_enum, params=params)
+			# For extended actions (string values), use ActionCommand with string action_type
+			# ActionDispatcher handles these via string comparison
+			action = ActionCommand(action_type=action_type_value, params=params)
 
 		# Execute action
 		try:

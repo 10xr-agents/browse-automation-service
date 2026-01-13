@@ -32,9 +32,12 @@ class ActionCommand(BaseModel):
 	"""Base action command primitive.
 
 	This is the unified interface for all browser actions.
+	
+	Supports both ActionType enum values (for core actions) and string values
+	(for extended actions implemented in ActionDispatcher).
 	"""
 
-	action_type: ActionType = Field(..., description='Type of action to execute')
+	action_type: ActionType | str = Field(..., description='Type of action to execute')
 	params: dict[str, Any] = Field(default_factory=dict, description='Action-specific parameters')
 
 	class Config:

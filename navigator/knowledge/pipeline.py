@@ -62,8 +62,8 @@ class KnowledgePipeline:
 			exclude_paths: List of path patterns to exclude (e.g., ['/admin/*', '/api/*'])
 		"""
 		self.browser_session = browser_session
-		self.storage = storage or KnowledgeStorage(use_arangodb=False)
-		self.vector_store = vector_store or VectorStore(use_vector_db=False)
+		self.storage = storage or KnowledgeStorage(use_mongodb=True)
+		self.vector_store = vector_store or VectorStore(use_mongodb=True)
 		
 		# Initialize base_url from start_url when explore_and_store is called
 		# For now, set it to None - it will be set when exploration starts
@@ -110,34 +110,44 @@ class KnowledgePipeline:
 			Dictionary with processing results
 		"""
 		try:
+			logger.debug(f"      📥 Extracting content from: {url}")
 			# Extract content
 			content = await self.semantic_analyzer.extract_content(url)
+			logger.debug(f"      📊 Content extracted: {len(content.get('paragraphs', []))} paragraphs, {len(content.get('headings', []))} headings")
 			
 			# Extract entities
+			logger.debug(f"      🏷️  Identifying entities...")
 			entities = self.semantic_analyzer.identify_entities(content.get('text', ''))
+			logger.debug(f"      ✅ Found {len(entities)} entities")
 			
 			# Extract topics
+			logger.debug(f"      📑 Extracting topics...")
 			topics = self.semantic_analyzer.extract_topics(content)
+			logger.debug(f"      ✅ Found {len(topics)} topics")
 			
 			# Generate embedding
+			logger.debug(f"      🔢 Generating embedding...")
 			embedding = self.semantic_analyzer.generate_embedding(content.get('text', ''))
+			logger.debug(f"      ✅ Embedding generated (size: {len(embedding)})")
 			
 			# Store page
+			logger.debug(f"      💾 Storing page: {url}")
 			page_data = {
 				**content,
 				'entities': entities,
 				'topics': topics,
 			}
 			await self.storage.store_page(url, page_data)
+			logger.debug(f"      ✅ Page stored successfully")
 			
 			# Store embedding
+			logger.debug(f"      💾 Storing embedding...")
 			await self.vector_store.store_embedding(
 				id=url,
 				embedding=embedding,
 				metadata={'url': url, 'title': content.get('title', '')},
 			)
-			
-			logger.debug(f"Processed URL: {url}")
+			logger.debug(f"      ✅ Embedding stored")
 			
 			return {
 				'url': url,
@@ -147,9 +157,9 @@ class KnowledgePipeline:
 				'topics': topics,
 			}
 		except Exception as e:
-			logger.error(f"Failed to process URL {url}: {e}")
 			# Categorize error
 			error_type = self._categorize_error(str(e), url)
+			logger.debug(f"      ❌ Processing failed ({error_type}): {str(e)}")
 			return {
 				'url': url,
 				'success': False,
@@ -192,115 +202,6 @@ class KnowledgePipeline:
 		
 		# Default to 'other'
 		return 'other'
-	
-	async def explore_and_store(
-		self,
-		start_url: str,
-		max_pages: int | None = None,
-		job_id: str | None = None,
-	) -> dict[str, Any]:
-		"""
-		Explore website and store all discovered pages.
-		
-		Args:
-			start_url: Starting URL for exploration
-			max_pages: Maximum number of pages to process (None for no limit)
-			job_id: Optional job ID for tracking (auto-generated if None)
-		
-		Returns:
-			Dictionary with exploration and storage results
-		"""
-		# Generate job ID if not provided
-		if job_id is None:
-			job_id = uuid7str()
-		
-		self.current_job_id = job_id
-		self.job_status = "running"
-		self.job_paused = False
-		
-		# Reset enhanced tracking
-		self.job_start_time = time.time()
-		self.page_processing_times = []
-		self.recent_completed_pages = []
-		
-		results = {
-			'job_id': job_id,
-			'start_url': start_url,
-			'pages_processed': 0,
-			'pages_stored': 0,
-			'pages_failed': 0,
-			'external_links_detected': 0,
-			'errors': [],
-			'results': [],
-			'website_metadata': {},  # Will be populated from start page
-		}
-		
-		try:
-			# Extract website metadata from start page
-			try:
-				start_content = await self.semantic_analyzer.extract_content(start_url)
-				results['website_metadata'] = {
-					'title': start_content.get('title', ''),
-					'description': start_content.get('description', ''),
-					'url': start_url,
-				}
-			except Exception as e:
-				logger.warning(f"Failed to extract website metadata: {e}")
-				results['website_metadata'] = {'url': start_url}
-			
-			# Emit initial progress
-			await self.progress_observer.on_progress(ExplorationProgress(
-				job_id=job_id,
-				status="running",
-				current_page=start_url,
-				pages_completed=0,
-				pages_queued=1,
-				pages_failed=0,
-			))
-			
-			# Set base URL for external link detection
-			# CRITICAL: This ensures external links are detected and NOT followed
-			self.exploration_engine.base_url = start_url
-			
-			# Discover links from start URL
-			links = await self.exploration_engine.discover_links(start_url)
-			
-			# Collect URLs to process (start with start_url, then discovered links)
-			urls_to_process = [start_url]
-			processed_urls = set()
-			
-			# Add discovered links (only internal links for exploration)
-			external_count = 0
-			for link in links:
-				link_url = link.get('href', '') or link.get('url', '')
-				is_internal = link.get('internal', True)  # Default to True if not specified
-				
-				# Store all links (internal and external) for graph representation
-				try:
-					await self.storage.store_link(start_url, link_url, {
-						'anchor_text': link.get('text', ''),
-						'link_type': 'internal' if is_internal else 'external',
-					})
-				except Exception as e:
-					logger.error(f"Failed to store link {start_url} -> {link_url}: {e}")
-				
-				# Only add internal links to exploration queue
-				# CRITICAL: External links are detected and stored, but NOT explored
-				if is_internal and link_url and link_url not in processed_urls:
-					# Apply path filtering
-					if self._should_explore_url(link_url):
-						urls_to_process.append(link_url)
-					else:
-						logger.debug(f"Skipping URL due to path restrictions: {link_url}")
-				elif not is_internal:
-					external_count += 1
-					results['external_links_detected'] += 1
-					await self.progress_observer.on_external_link_detected(start_url, link_url)
-					logger.debug(f"Skipping external link: {link_url} (detected but not exploring)")
-			
-			# Limit to max_pages if specified
-			if max_pages:
-				urls_to_process = urls_to_process[:max_pages]
 	
 	def _should_explore_url(self, url: str) -> bool:
 		"""
@@ -347,9 +248,139 @@ class KnowledgePipeline:
 		# Convert pattern to regex
 		pattern_regex = pattern.replace('*', '.*')
 		return bool(re.match(pattern_regex, path))
+	
+	async def explore_and_store(
+		self,
+		start_url: str,
+		max_pages: int | None = None,
+		job_id: str | None = None,
+	) -> dict[str, Any]:
+		"""
+		Explore website and store all discovered pages.
+		
+		Args:
+			start_url: Starting URL for exploration
+			max_pages: Maximum number of pages to process (None for no limit)
+			job_id: Optional job ID for tracking (auto-generated if None)
+		
+		Returns:
+			Dictionary with exploration and storage results
+		"""
+		# Generate job ID if not provided
+		if job_id is None:
+			job_id = uuid7str()
+		
+		self.current_job_id = job_id
+		self.job_status = "running"
+		self.job_paused = False
+		
+		# Reset enhanced tracking
+		self.job_start_time = time.time()
+		self.page_processing_times = []
+		self.recent_completed_pages = []
+		
+		logger.info(f"🔍 [Job {job_id}] Starting exploration from: {start_url}")
+		logger.info(f"   Max pages: {max_pages or 'unlimited'}, Max depth: {self.exploration_engine.max_depth}")
+		logger.info(f"   Strategy: {self.exploration_engine.strategy.value}")
+		if self.include_paths:
+			logger.info(f"   Include paths: {self.include_paths}")
+		if self.exclude_paths:
+			logger.info(f"   Exclude paths: {self.exclude_paths}")
+		
+		results = {
+			'job_id': job_id,
+			'start_url': start_url,
+			'pages_processed': 0,
+			'pages_stored': 0,
+			'pages_failed': 0,
+			'external_links_detected': 0,
+			'errors': [],
+			'results': [],
+			'website_metadata': {},  # Will be populated from start page
+		}
+		
+		try:
+			# Extract website metadata from start page
+			try:
+				start_content = await self.semantic_analyzer.extract_content(start_url)
+				results['website_metadata'] = {
+					'title': start_content.get('title', ''),
+					'description': start_content.get('description', ''),
+					'url': start_url,
+				}
+			except Exception as e:
+				logger.warning(f"Failed to extract website metadata: {e}")
+				results['website_metadata'] = {'url': start_url}
+			
+			# Emit initial progress
+			await self.progress_observer.on_progress(ExplorationProgress(
+				job_id=job_id,
+				status="running",
+				current_page=start_url,
+				pages_completed=0,
+				pages_queued=1,
+				pages_failed=0,
+			))
+			
+			# Set base URL for external link detection
+			# CRITICAL: This ensures external links are detected and NOT followed
+			self.exploration_engine.base_url = start_url
+			
+			# Discover links from start URL
+			logger.info(f"🔗 [Job {job_id}] Discovering links from start URL: {start_url}")
+			links = await self.exploration_engine.discover_links(start_url)
+			logger.info(f"   Discovered {len(links)} links from start URL")
+			
+			# Collect URLs to process (start with start_url, then discovered links)
+			urls_to_process = [start_url]
+			processed_urls = set()
+			
+			# Add discovered links (only internal links for exploration)
+			external_count = 0
+			internal_count = 0
+			filtered_count = 0
+			for link in links:
+				link_url = link.get('href', '') or link.get('url', '')
+				is_internal = link.get('internal', True)  # Default to True if not specified
+				
+				# Store all links (internal and external) for graph representation
+				try:
+					await self.storage.store_link(start_url, link_url, {
+						'anchor_text': link.get('text', ''),
+						'link_type': 'internal' if is_internal else 'external',
+					})
+				except Exception as e:
+					logger.error(f"Failed to store link {start_url} -> {link_url}: {e}")
+				
+				# Only add internal links to exploration queue
+				# CRITICAL: External links are detected and stored, but NOT explored
+				if is_internal and link_url and link_url not in processed_urls:
+					# Apply path filtering
+					if self._should_explore_url(link_url):
+						urls_to_process.append(link_url)
+						internal_count += 1
+					else:
+						filtered_count += 1
+						logger.debug(f"   ⏭️  Skipping URL due to path restrictions: {link_url}")
+				elif not is_internal:
+					external_count += 1
+					results['external_links_detected'] += 1
+					await self.progress_observer.on_external_link_detected(start_url, link_url)
+					logger.debug(f"   🔗 External link detected (not exploring): {link_url}")
+			
+			logger.info(f"   📊 Link summary: {internal_count} internal, {external_count} external, {filtered_count} filtered")
+			logger.info(f"   📋 Total URLs to process: {len(urls_to_process)}")
+			
+			# Limit to max_pages if specified
+			if max_pages:
+				original_count = len(urls_to_process)
+				urls_to_process = urls_to_process[:max_pages]
+				if len(urls_to_process) < original_count:
+					logger.info(f"   ⚠️  Limited to {max_pages} pages (had {original_count} URLs)")
 			
 			# Process each URL
-			for url in urls_to_process:
+			logger.info(f"🔄 [Job {job_id}] Starting to process {len(urls_to_process)} URLs")
+			for idx, url in enumerate(urls_to_process, 1):
 				# Check for pause
 				if self.job_paused:
 					self.job_status = "paused"
@@ -370,19 +401,21 @@ class KnowledgePipeline:
 					self.job_status = "running"
 				
 				if url in processed_urls:
+					logger.debug(f"   ⏭️  [Job {job_id}] Skipping already processed URL: {url}")
 					continue
 				processed_urls.add(url)
 				
 				# Check for cancellation
 				if self.job_status == "cancelled":
-					logger.info(f"Job {job_id} cancelled, stopping exploration")
+					logger.info(f"   ⛔ [Job {job_id}] Cancelled, stopping exploration")
 					break
 				elif self.job_status == "cancelling":
 					# Process current page, then cancel
-					logger.info(f"Job {job_id} cancelling after current page")
+					logger.info(f"   ⏸️  [Job {job_id}] Cancelling after current page")
 				
 				# Track processing time
 				page_start_time = time.time()
+				logger.info(f"   📄 [Job {job_id}] Processing page {idx}/{len(urls_to_process)}: {url}")
 				
 				# Calculate enhanced metrics
 				estimated_time = self._calculate_estimated_time_remaining(
@@ -434,11 +467,16 @@ class KnowledgePipeline:
 					if len(self.recent_completed_pages) > self.max_recent_pages:
 						self.recent_completed_pages = self.recent_completed_pages[-self.max_recent_pages:]
 					
+					logger.info(f"   ✅ [Job {job_id}] Page {idx} completed: {page_title[:60]}... ({page_processing_time:.2f}s)")
 					await self.progress_observer.on_page_completed(url, process_result)
 					
 					# Discover and store links from this page
 					try:
+						logger.debug(f"      🔍 Discovering links from: {url}")
 						page_links = await self.exploration_engine.discover_links(url)
+						logger.debug(f"      📊 Found {len(page_links)} links on this page")
+						new_links_added = 0
+						external_links_found = 0
 						for link in page_links:
 							link_url = link.get('href', '') or link.get('url', '')
 							is_internal = link.get('internal', True)
@@ -456,21 +494,27 @@ class KnowledgePipeline:
 								# CRITICAL: External links are detected and stored, but NOT added to exploration queue
 								if not is_internal:
 									results['external_links_detected'] += 1
+									external_links_found += 1
 									await self.progress_observer.on_external_link_detected(url, link_url)
-									logger.debug(f"External link detected: {url} -> {link_url} (stored but not exploring)")
+									logger.debug(f"         🔗 External: {link_url}")
 								elif link_url not in processed_urls and link_url not in urls_to_process:
 									# Apply path filtering before adding to queue
 									if self._should_explore_url(link_url):
 										urls_to_process.append(link_url)
+										new_links_added += 1
 									else:
-										logger.debug(f"Skipping URL due to path restrictions: {link_url}")
+										logger.debug(f"         ⏭️  Filtered: {link_url}")
+						if new_links_added > 0 or external_links_found > 0:
+							logger.info(f"      📈 Links: {new_links_added} new internal, {external_links_found} external")
 					except Exception as e:
-						logger.error(f"Failed to discover links from {url}: {e}")
+						logger.error(f"      ❌ Failed to discover links from {url}: {e}", exc_info=True)
 						await self.progress_observer.on_error(url, str(e))
 				else:
 					results['pages_failed'] += 1
 					results['errors'].append(process_result)
 					error_msg = process_result.get('error', 'Unknown error')
+					error_type = process_result.get('error_type', 'unknown')
+					logger.warning(f"   ❌ [Job {job_id}] Page {idx} failed ({error_type}): {error_msg}")
 					await self.progress_observer.on_error(url, error_msg)
 				
 				# Check if cancelling after current page
@@ -493,9 +537,22 @@ class KnowledgePipeline:
 				external_links_detected=results['external_links_detected'],
 			))
 			
-			logger.info(f"Exploration complete: {results['pages_stored']}/{results['pages_processed']} pages stored")
+			total_time = time.time() - self.job_start_time if self.job_start_time else 0
+			logger.info("=" * 80)
+			logger.info(f"🏁 [Job {job_id}] Exploration complete")
+			logger.info(f"   Pages stored: {results['pages_stored']}/{results['pages_processed']}")
+			logger.info(f"   Pages failed: {results['pages_failed']}")
+			logger.info(f"   External links detected: {results['external_links_detected']}")
+			logger.info(f"   Total time: {total_time:.2f}s")
+			if self.page_processing_times:
+				avg_time = sum(self.page_processing_times) / len(self.page_processing_times)
+				logger.info(f"   Avg page time: {avg_time:.2f}s")
+			logger.info("=" * 80)
 		except Exception as e:
-			logger.error(f"Failed to explore and store: {e}")
+			logger.error("=" * 80)
+			logger.error(f"❌ [Job {job_id}] Exploration failed: {e}")
+			logger.error(f"   Error type: {type(e).__name__}")
+			logger.error("=" * 80, exc_info=True)
 			self.job_status = "failed"
 			results['error'] = str(e)
 			await self.progress_observer.on_progress(ExplorationProgress(

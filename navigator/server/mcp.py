@@ -40,8 +40,10 @@ except ImportError:
 	logging.error('MCP SDK not installed. Install with: pip install mcp')
 	sys.exit(1)
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from .env.local first, then .env
+# .env.local takes precedence (for local development overrides)
+load_dotenv(dotenv_path='.env.local', override=False)  # Load .env.local first
+load_dotenv(override=True)  # Then load .env (or system env) with override
 
 from browser_use import BrowserSession
 from browser_use.browser.profile import BrowserProfile
@@ -151,14 +153,29 @@ class BrowserAutomationMCPServer:
 				# Action execution tools (LiveKit-aware)
 				types.Tool(
 					name='execute_action',
-					description='Execute a browser action (navigate, click, type, scroll, wait)',
+					description='Execute a browser action. Available actions: navigate, click, type, scroll, wait, go_back, go_forward, refresh, send_keys, right_click, double_click, hover, drag_drop, type_slowly, select_all, copy, paste, cut, clear, upload_file, select_dropdown, fill_form, select_multiple, submit_form, reset_form, play_video, pause_video, seek_video, adjust_volume, toggle_fullscreen, toggle_mute, take_screenshot, keyboard_shortcut, multi_select, highlight_element, zoom_in, zoom_out, zoom_reset, download_file, presentation_mode, show_pointer, animate_scroll, highlight_region, draw_on_page, focus_element',
 					inputSchema={
 						'type': 'object',
 						'properties': {
 							'room_name': {'type': 'string', 'description': 'LiveKit room name'},
 							'action_type': {
 								'type': 'string',
-								'enum': ['navigate', 'click', 'type', 'scroll', 'wait', 'go_back', 'refresh'],
+								'enum': [
+									# Core navigation actions
+									'navigate', 'click', 'type', 'scroll', 'wait', 'go_back', 'go_forward', 'refresh', 'send_keys',
+									# Interaction actions
+									'right_click', 'double_click', 'hover', 'drag_drop',
+									# Text input actions
+									'type_slowly', 'select_all', 'copy', 'paste', 'cut', 'clear',
+									# Form actions
+									'upload_file', 'select_dropdown', 'fill_form', 'select_multiple', 'submit_form', 'reset_form',
+									# Media actions
+									'play_video', 'pause_video', 'seek_video', 'adjust_volume', 'toggle_fullscreen', 'toggle_mute',
+									# Advanced actions
+									'take_screenshot', 'keyboard_shortcut', 'multi_select', 'highlight_element', 'zoom_in', 'zoom_out', 'zoom_reset', 'download_file',
+									# Presentation actions
+									'presentation_mode', 'show_pointer', 'animate_scroll', 'highlight_region', 'draw_on_page', 'focus_element',
+								],
 								'description': 'Type of action to execute',
 							},
 							'params': {
@@ -183,6 +200,17 @@ class BrowserAutomationMCPServer:
 				types.Tool(
 					name='get_screen_content',
 					description='Get screen content with DOM summary, scroll position, viewport, and cursor position for agent communication',
+					inputSchema={
+						'type': 'object',
+						'properties': {
+							'room_name': {'type': 'string', 'description': 'LiveKit room name'},
+						},
+						'required': ['room_name'],
+					},
+				),
+				types.Tool(
+					name='find_form_fields',
+					description='Intelligently find form field indices by analyzing element attributes (type, name, id, placeholder). Returns indices for username/email field, password field, and submit button. This is much faster than brute-forcing through indices.',
 					inputSchema={
 						'type': 'object',
 						'properties': {
@@ -310,6 +338,8 @@ class BrowserAutomationMCPServer:
 					result = await self._get_browser_context(args)
 				elif name == 'get_screen_content':
 					result = await self._get_screen_content(args)
+				elif name == 'find_form_fields':
+					result = await self._find_form_fields(args)
 				elif name == 'recover_browser_session':
 					result = await self._recover_browser_session(args)
 				elif name == 'start_knowledge_exploration':
@@ -334,7 +364,13 @@ class BrowserAutomationMCPServer:
 				return [types.TextContent(type='text', text=json.dumps(result, indent=2))]
 			except Exception as e:
 				logger.error(f'[MCP] ❌ Tool execution failed: {name} - {e}', exc_info=True)
-				return [types.TextContent(type='text', text=f'Error: {str(e)}')]
+				# Return structured error response matching specification format
+				error_response = {
+					'success': False,
+					'error': str(e),
+					'status': None,
+				}
+				return [types.TextContent(type='text', text=json.dumps(error_response, indent=2))]
 
 	async def _ensure_browser_session(self):
 		"""Ensure browser session is initialized."""
@@ -345,56 +381,6 @@ class BrowserAutomationMCPServer:
 			await self.browser_session.attach_all_watchdogs()
 			self.action_dispatcher = ActionDispatcher(browser_session=self.browser_session)
 			logger.info('Browser session initialized')
-
-	async def _execute_action(self, arguments: dict[str, Any]) -> dict[str, Any]:
-		"""Execute an action command."""
-		await self._ensure_browser_session()
-
-		action_type_str = arguments.get('action_type')
-		params = arguments.get('params', {})
-
-		if not action_type_str:
-			raise ValueError('action_type is required')
-
-		# Map string action type to ActionType enum
-		action_type_map = {
-			'navigate': ActionType.NAVIGATE,
-			'click': ActionType.CLICK,
-			'type': ActionType.TYPE,
-			'scroll': ActionType.SCROLL,
-			'wait': ActionType.WAIT,
-			'go_back': ActionType.GO_BACK,
-			'refresh': ActionType.REFRESH,
-		}
-
-		action_type = action_type_map.get(action_type_str)
-		if not action_type:
-			raise ValueError(f'Unknown action_type: {action_type_str}')
-
-		# Create appropriate action command
-		if action_type == ActionType.NAVIGATE:
-			action = NavigateActionCommand(params=params)
-		elif action_type == ActionType.CLICK:
-			action = ClickActionCommand(params=params)
-		elif action_type == ActionType.TYPE:
-			action = TypeActionCommand(params=params)
-		elif action_type == ActionType.SCROLL:
-			action = ScrollActionCommand(params=params)
-		elif action_type == ActionType.WAIT:
-			action = WaitActionCommand(params=params)
-		else:
-			# For go_back and refresh, use base ActionCommand
-			action = ActionCommand(action_type=action_type, params=params)
-
-		# Execute action
-		result = await self.action_dispatcher.execute_action(action)
-
-		# Return result as dict
-		return {
-			'success': result.success,
-			'error': result.error,
-			'data': result.data,
-		}
 
 	async def _start_browser_session(self, arguments: dict[str, Any]) -> dict[str, Any]:
 		"""Start a browser session for a LiveKit room."""
@@ -493,15 +479,73 @@ class BrowserAutomationMCPServer:
 		if not room_name:
 			raise ValueError('room_name is required')
 
-		screen_content = await self.session_manager.get_screen_content(room_name)
-		
-		# screen_content is already a dict from browser_session_manager.get_screen_content()
-		# (it calls model_dump() internally), so just return it directly
-		if isinstance(screen_content, dict):
-			return screen_content
-		else:
-			# Fallback: if it's a Pydantic model, convert to dict
-			return screen_content.model_dump()
+		try:
+			screen_content = await self.session_manager.get_screen_content(room_name)
+			
+			# screen_content is already a dict from browser_session_manager.get_screen_content()
+			# (it calls model_dump() internally), so wrap it in success/error/data structure
+			if isinstance(screen_content, dict):
+				content_data = screen_content
+			else:
+				# Fallback: if it's a Pydantic model, convert to dict
+				content_data = screen_content.model_dump()
+			
+			# Return wrapped response matching specification format
+			return {
+				'success': True,
+				'error': None,
+				'data': content_data,
+			}
+		except Exception as e:
+			# Return error in specification format
+			return {
+				'success': False,
+				'error': str(e),
+				'data': None,
+			}
+
+	async def _find_form_fields(self, arguments: dict[str, Any]) -> dict[str, Any]:
+		"""Find form field indices by analyzing element attributes."""
+		room_name = arguments.get('room_name')
+		if not room_name:
+			raise ValueError('room_name is required')
+
+		try:
+			# Get session from session manager
+			session_info = self.session_manager.sessions.get(room_name)
+			if not session_info:
+				return {
+					'success': False,
+					'error': f'No active browser session for room: {room_name}',
+					'data': None,
+				}
+
+			# Use AuthenticationService to find form fields
+			from navigator.knowledge.auth_service import AuthenticationService
+			auth_service = AuthenticationService(session_info.browser_session)
+			
+			# Find form fields (username and password params are only for validation, not lookup)
+			username_index, password_index, submit_index = await auth_service.find_form_fields(
+				username='',  # Not used for lookup, only validation
+				password='',  # Not used for lookup, only validation
+			)
+
+			return {
+				'success': True,
+				'error': None,
+				'data': {
+					'username_index': username_index,
+					'password_index': password_index,
+					'submit_index': submit_index,
+				},
+			}
+		except Exception as e:
+			logger.error(f'Error finding form fields: {e}', exc_info=True)
+			return {
+				'success': False,
+				'error': str(e),
+				'data': None,
+			}
 
 	async def _recover_browser_session(self, arguments: dict[str, Any]) -> dict[str, Any]:
 		"""Recover a failed browser session."""
@@ -542,7 +586,10 @@ class BrowserAutomationMCPServer:
 		
 		try:
 			import redis.asyncio as redis
-			redis_client = redis.from_url("redis://localhost:6379", decode_responses=False)
+			redis_url = os.getenv("REDIS_URL")
+			if not redis_url:
+				raise ValueError("REDIS_URL not set in environment variables. Please set it in .env.local")
+			redis_client = redis.from_url(redis_url, decode_responses=False)
 			from navigator.knowledge.progress_observer import RedisProgressObserver
 			redis_observer = RedisProgressObserver(redis_client=redis_client)
 			observers.append(redis_observer)
@@ -613,16 +660,20 @@ class BrowserAutomationMCPServer:
 		if not KNOWLEDGE_AVAILABLE:
 			raise ValueError('Knowledge retrieval components not available')
 		
-		from navigator.knowledge.rest_api import _job_registry
+		from navigator.knowledge.rest_api import _active_pipelines
+		from navigator.knowledge.job_registry import get_job_registry
+		
 		job_id = arguments.get('job_id')
 		if not job_id:
 			raise ValueError('job_id is required')
 		
-		job = _job_registry.get(job_id)
+		job_registry = await get_job_registry()
+		job = await job_registry.get_job(job_id)
 		if not job:
 			return {'error': f'Job {job_id} not found'}
 		
-		pipeline = job.get('pipeline')
+		# Pipeline stored in memory, not MongoDB
+		pipeline = _active_pipelines.get(job_id)
 		results = job.get('results', {})
 		
 		if pipeline:
@@ -646,22 +697,26 @@ class BrowserAutomationMCPServer:
 		if not KNOWLEDGE_AVAILABLE:
 			raise ValueError('Knowledge retrieval components not available')
 		
-		from navigator.knowledge.rest_api import _job_registry
+		from navigator.knowledge.rest_api import _active_pipelines
+		from navigator.knowledge.job_registry import get_job_registry
+		
 		job_id = arguments.get('job_id')
 		if not job_id:
 			raise ValueError('job_id is required')
 		
-		job = _job_registry.get(job_id)
+		job_registry = await get_job_registry()
+		job = await job_registry.get_job(job_id)
 		if not job:
 			return {'error': f'Job {job_id} not found'}
 		
-		pipeline = job.get('pipeline')
+		# Pipeline stored in memory, not MongoDB
+		pipeline = _active_pipelines.get(job_id)
 		if not pipeline:
 			return {'error': 'Job not started yet'}
 		
 		success = pipeline.pause_job()
 		if success:
-			job['status'] = 'paused'
+			await job_registry.update_job(job_id, {'status': 'paused'})
 			return {'job_id': job_id, 'status': 'paused'}
 		else:
 			return {'error': 'Job cannot be paused (not running)'}
@@ -671,22 +726,26 @@ class BrowserAutomationMCPServer:
 		if not KNOWLEDGE_AVAILABLE:
 			raise ValueError('Knowledge retrieval components not available')
 		
-		from navigator.knowledge.rest_api import _job_registry
+		from navigator.knowledge.rest_api import _active_pipelines
+		from navigator.knowledge.job_registry import get_job_registry
+		
 		job_id = arguments.get('job_id')
 		if not job_id:
 			raise ValueError('job_id is required')
 		
-		job = _job_registry.get(job_id)
+		job_registry = await get_job_registry()
+		job = await job_registry.get_job(job_id)
 		if not job:
 			return {'error': f'Job {job_id} not found'}
 		
-		pipeline = job.get('pipeline')
+		# Pipeline stored in memory, not MongoDB
+		pipeline = _active_pipelines.get(job_id)
 		if not pipeline:
 			return {'error': 'Job not started yet'}
 		
 		success = pipeline.resume_job()
 		if success:
-			job['status'] = 'running'
+			await job_registry.update_job(job_id, {'status': 'running'})
 			return {'job_id': job_id, 'status': 'resumed'}
 		else:
 			return {'error': 'Job cannot be resumed (not paused)'}
@@ -696,23 +755,27 @@ class BrowserAutomationMCPServer:
 		if not KNOWLEDGE_AVAILABLE:
 			raise ValueError('Knowledge retrieval components not available')
 		
-		from navigator.knowledge.rest_api import _job_registry
+		from navigator.knowledge.rest_api import _active_pipelines
+		from navigator.knowledge.job_registry import get_job_registry
+		
 		job_id = arguments.get('job_id')
 		if not job_id:
 			raise ValueError('job_id is required')
 		
-		job = _job_registry.get(job_id)
+		job_registry = await get_job_registry()
+		job = await job_registry.get_job(job_id)
 		if not job:
 			return {'error': f'Job {job_id} not found'}
 		
-		pipeline = job.get('pipeline')
+		# Pipeline stored in memory, not MongoDB
+		pipeline = _active_pipelines.get(job_id)
 		if pipeline:
 			success = pipeline.cancel_job()
 			if success:
-				job['status'] = 'cancelled'
+				await job_registry.update_job(job_id, {'status': 'cancelled'})
 				return {'job_id': job_id, 'status': 'cancelled'}
 		
-		job['status'] = 'cancelled'
+		await job_registry.update_job(job_id, {'status': 'cancelled'})
 		return {'job_id': job_id, 'status': 'cancelled'}
 	
 	async def _get_knowledge_results(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -720,19 +783,21 @@ class BrowserAutomationMCPServer:
 		if not KNOWLEDGE_AVAILABLE:
 			raise ValueError('Knowledge retrieval components not available')
 		
-		from navigator.knowledge.rest_api import _job_registry
+		from navigator.knowledge.job_registry import get_job_registry
+		
 		job_id = arguments.get('job_id')
 		partial = arguments.get('partial', False)
 		
 		if not job_id:
 			raise ValueError('job_id is required')
 		
-		job = _job_registry.get(job_id)
+		job_registry = await get_job_registry()
+		job = await job_registry.get_job(job_id)
 		if not job:
 			return {'error': f'Job {job_id} not found'}
 		
 		status = job.get('status', 'unknown')
-		if status not in ('completed', 'failed', 'cancelled') and not partial:
+		if status not in ('completed', 'failed', 'cancelled', 'cancelling') and not partial:
 			return {'error': f'Job {job_id} is still {status}. Use partial=true to get partial results.'}
 		
 		results = job.get('results', {})
@@ -744,7 +809,7 @@ class BrowserAutomationMCPServer:
 			raise ValueError('Knowledge retrieval components not available')
 		
 		from navigator.knowledge.api import KnowledgeAPI
-		from navigator.knowledge.rest_api import _job_registry
+		from navigator.knowledge.rest_api import _active_pipelines
 		from navigator.knowledge.storage import KnowledgeStorage
 		from navigator.knowledge.vector_store import VectorStore
 		
@@ -755,16 +820,14 @@ class BrowserAutomationMCPServer:
 			raise ValueError('query_type is required')
 		
 		# Create KnowledgeAPI instance
-		storage = KnowledgeStorage(use_arangodb=False)
-		vector_store = VectorStore(use_vector_db=False)
+		storage = KnowledgeStorage(use_mongodb=True)
+		vector_store = VectorStore(use_mongodb=True)
 		
 		# Get pipeline from first available job (or create new one)
+		# Note: pipelines are stored in _active_pipelines (in-memory)
 		pipeline = None
-		for job in _job_registry.values():
-			p = job.get('pipeline')
-			if p:
-				pipeline = p
-				break
+		if _active_pipelines:
+			pipeline = next(iter(_active_pipelines.values()))
 		
 		knowledge_api = KnowledgeAPI(
 			storage=storage,

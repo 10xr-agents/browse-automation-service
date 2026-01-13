@@ -1,6 +1,6 @@
 [project]
 name = "browser-use"
-description = "Make websites accessible for AI agents"
+description = "Make websites accessible for AI agents - includes browser-use library and navigator server"
 authors = [{ name = "Gregor Zunic" }]
 version = "0.11.2"
 readme = "README.md"
@@ -51,7 +51,8 @@ dependencies = [
     "livekit>=0.11.0",
     "pyjwt>=2.8.0",
     "redis>=5.0.0",
-    "bullmq>=0.30.0",
+    "rq>=1.15.0",  # Redis Queue for background job processing
+    "motor>=3.6.0",  # MongoDB async driver
 ]
 # google-api-core: only used for Google LLM APIs
 # pyperclip: only used for examples that use copy/paste
@@ -172,6 +173,9 @@ include = [
     "browser_use/cli_templates/*.py",
     "browser_use/py.typed",
     "browser_use/dom/**/*.js",
+    "navigator/**/*.py",
+    "!navigator/**/tests/*.py",
+    "!navigator/**/tests.py",
     "!tests/**/*.py",
     "!debug/*",
 ]
