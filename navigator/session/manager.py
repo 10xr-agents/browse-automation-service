@@ -5,6 +5,7 @@ Manages browser sessions per LiveKit room, including:
 - Browser session lifecycle
 - LiveKit streaming integration
 - Session state tracking
+- Sequenced communication components (optional)
 """
 
 import asyncio
@@ -13,7 +14,6 @@ from typing import Any
 
 from browser_use import BrowserSession
 from browser_use.browser.profile import BrowserProfile
-
 from navigator.action.dispatcher import ActionDispatcher
 from navigator.streaming.broadcaster import EventBroadcaster
 from navigator.streaming.livekit import LiveKitStreamingService
@@ -50,6 +50,13 @@ class BrowserSessionManager:
 		"""
 		self.sessions: dict[str, BrowserSessionInfo] = {}
 		self.event_broadcaster = event_broadcaster
+		
+		# Sequenced communication components (optional, initialized lazily)
+		self._state_diff_engine: Any | None = None
+		self._state_publisher: Any | None = None
+		self._sequence_tracker: Any | None = None
+		self._dedup_cache: Any | None = None
+		self._redis_streams_client: Any | None = None
 
 	async def start_session(
 		self,
@@ -171,7 +178,7 @@ class BrowserSessionManager:
 			action_dispatcher: Action dispatcher for getting browser context
 			room_name: LiveKit room name for event broadcasting
 		"""
-		from browser_use.browser.events import NavigationCompleteEvent, BrowserErrorEvent
+		from browser_use.browser.events import BrowserErrorEvent, NavigationCompleteEvent
 
 		# Capture action_dispatcher in closure
 		_dispatcher = action_dispatcher
@@ -301,6 +308,66 @@ class BrowserSessionManager:
 				del self.sessions[room_name]
 
 		return {'status': 'closed', 'room_name': room_name}
+	
+	def _init_sequenced_components(self) -> None:
+		"""Initialize sequenced communication components (lazy initialization)."""
+		if self._state_diff_engine is not None:
+			return  # Already initialized
+		
+		try:
+			from navigator.state.dedup_cache import DedupCache
+			from navigator.state.diff_engine import StateDiffEngine
+			from navigator.state.sequence_tracker import SequenceTracker
+			
+			# Initialize components
+			self._state_diff_engine = StateDiffEngine()
+			self._sequence_tracker = SequenceTracker()
+			self._dedup_cache = DedupCache(ttl_seconds=300)  # 5 minutes TTL
+			
+			# Initialize Redis client for streams (async, so we'll initialize it when needed)
+			# For now, set to None - will be initialized async when needed
+			self._redis_streams_client = None
+			self._state_publisher = None
+			
+			logger.debug("Sequenced communication components initialized")
+		except ImportError as e:
+			logger.debug(f"Sequenced communication components not available: {e}")
+	
+	async def _get_redis_streams_client(self) -> Any | None:
+		"""Get Redis async client for streams (lazy initialization)."""
+		if self._redis_streams_client is None:
+			try:
+				from navigator.streaming.redis_client import get_redis_streams_client
+				self._redis_streams_client = await get_redis_streams_client()
+				if self._redis_streams_client:
+					# Initialize state publisher with Redis client
+					from navigator.streaming.state_publisher import StatePublisher
+					self._state_publisher = StatePublisher(self._redis_streams_client)
+			except Exception as e:
+				logger.debug(f"Redis streams client not available: {e}")
+		return self._redis_streams_client
+	
+	def get_state_diff_engine(self) -> Any | None:
+		"""Get StateDiffEngine instance (lazy initialization)."""
+		self._init_sequenced_components()
+		return self._state_diff_engine
+	
+	def get_sequence_tracker(self) -> Any | None:
+		"""Get SequenceTracker instance (lazy initialization)."""
+		self._init_sequenced_components()
+		return self._sequence_tracker
+	
+	def get_dedup_cache(self) -> Any | None:
+		"""Get DedupCache instance (lazy initialization)."""
+		self._init_sequenced_components()
+		return self._dedup_cache
+	
+	async def get_state_publisher(self) -> Any | None:
+		"""Get StatePublisher instance (lazy initialization, requires Redis)."""
+		self._init_sequenced_components()
+		if self._state_publisher is None:
+			await self._get_redis_streams_client()  # This will initialize state_publisher
+		return self._state_publisher
 
 	async def handle_browser_error(self, room_name: str, error: str) -> None:
 		"""Handle browser error and broadcast to voice agent.
