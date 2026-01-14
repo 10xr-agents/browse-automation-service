@@ -243,6 +243,13 @@ class ActionDispatcher:
 			)
 
 		text = params['text']
+		# Validate that text is a non-empty string
+		if text is None or not isinstance(text, str):
+			return ActionResult(
+				success=False,
+				error='Type action requires "text" parameter to be a non-empty string',
+			)
+
 		clear = params.get('clear', False)
 
 		# If index is provided, get element from DOM

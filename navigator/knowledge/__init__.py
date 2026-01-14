@@ -2,6 +2,8 @@
 Knowledge Retrieval & Storage Flow
 
 Components for comprehensive website exploration and knowledge extraction.
+
+Includes Phase 6 REST API v2 for knowledge extraction.
 """
 
 from navigator.knowledge.api import KnowledgeAPI
@@ -13,6 +15,14 @@ from navigator.knowledge.sitemap_generator import SiteMapGenerator
 from navigator.knowledge.storage import KnowledgeStorage
 from navigator.knowledge.vector_store import VectorStore
 
+# Phase 6: Production REST API
+try:
+	from navigator.knowledge.api_v2 import create_knowledge_api_router
+	_API_AVAILABLE = True
+except ImportError:
+	_API_AVAILABLE = False
+	create_knowledge_api_router = None
+
 __all__ = [
 	'ExplorationEngine',
 	'ExplorationStrategy',
@@ -23,4 +33,5 @@ __all__ = [
 	'KnowledgePipeline',
 	'SiteMapGenerator',
 	'KnowledgeAPI',
+	'create_knowledge_api_router',
 ]

@@ -12,6 +12,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Import Redis exception types for better error handling
+try:
+	import redis.exceptions
+	REDIS_EXCEPTIONS_AVAILABLE = True
+except ImportError:
+	REDIS_EXCEPTIONS_AVAILABLE = False
+
 
 class CommandConsumer:
 	"""Consumes commands from Redis Streams."""
@@ -128,7 +135,16 @@ class CommandConsumer:
 			except asyncio.CancelledError:
 				break
 			except Exception as e:
-				logger.error(f"Error in consume loop for session {session_id}: {e}", exc_info=True)
+				# Check if it's a Redis connection error - stop consuming if Redis is unavailable
+				if REDIS_EXCEPTIONS_AVAILABLE and isinstance(e, redis.exceptions.ConnectionError):
+					logger.warning(f"Redis connection unavailable for session {session_id}, stopping consumer: {e}")
+					break  # Stop consuming if Redis is unavailable
+				# Also check error message for connection failures
+				error_str = str(e).lower()
+				if 'connection' in error_str and ('refused' in error_str or 'failed' in error_str or 'connect call failed' in error_str):
+					logger.warning(f"Redis connection unavailable for session {session_id}, stopping consumer: {e}")
+					break  # Stop consuming if Redis is unavailable
+				logger.debug(f"Error in consume loop for session {session_id}: {e}")
 				await asyncio.sleep(1)  # Backoff on error
 		
 		logger.info(f"Consume loop ended for session {session_id}")

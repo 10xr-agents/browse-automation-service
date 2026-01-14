@@ -57,6 +57,7 @@ class BrowserSessionManager:
 		self._sequence_tracker: Any | None = None
 		self._dedup_cache: Any | None = None
 		self._redis_streams_client: Any | None = None
+		self._command_consumer: Any | None = None  # CommandConsumer instance (singleton per manager)
 
 	async def start_session(
 		self,
@@ -166,6 +167,9 @@ class BrowserSessionManager:
 		)
 		session_info.is_active = True
 		self.sessions[room_name] = session_info
+
+		# Start CommandConsumer for sequenced communication (if available)
+		await self._start_command_consumer(room_name)
 
 		logger.info(f'[SessionManager] ✅ Browser session started for room: {room_name}')
 		return {'status': 'started', 'room_name': room_name}
@@ -286,6 +290,9 @@ class BrowserSessionManager:
 		logger.info(f'Closing browser session for room: {room_name}')
 
 		try:
+			# Stop CommandConsumer for this session (if running)
+			await self._stop_command_consumer(room_name)
+
 			# Stop video publishing
 			if session.livekit_service:
 				try:
@@ -368,6 +375,50 @@ class BrowserSessionManager:
 		if self._state_publisher is None:
 			await self._get_redis_streams_client()  # This will initialize state_publisher
 		return self._state_publisher
+	
+	async def _get_command_consumer(self) -> Any | None:
+		"""Get or create CommandConsumer instance (lazy initialization, singleton per manager)."""
+		if self._command_consumer is None:
+			try:
+				from navigator.streaming.command_consumer_factory import create_command_consumer
+				
+				# Create CommandConsumer using factory (handles all component initialization)
+				self._command_consumer = await create_command_consumer(
+					session_manager=self,
+					consumer_group="browser_agent_cluster",
+				)
+				
+				if self._command_consumer:
+					logger.info("CommandConsumer created and ready")
+				else:
+					logger.debug("CommandConsumer not available (Redis/components not configured)")
+			except Exception as e:
+				logger.debug(f"CommandConsumer not available: {e}")
+		
+		return self._command_consumer
+	
+	async def _start_command_consumer(self, session_id: str) -> None:
+		"""Start CommandConsumer for a session (if available)."""
+		try:
+			command_consumer = await self._get_command_consumer()
+			if command_consumer:
+				await command_consumer.start_consuming(session_id)
+				logger.info(f"CommandConsumer started for session: {session_id}")
+			else:
+				logger.debug(f"CommandConsumer not available, skipping start for session: {session_id}")
+		except Exception as e:
+			logger.warning(f"Failed to start CommandConsumer for session {session_id}: {e}")
+			# Don't fail session start if CommandConsumer fails
+	
+	async def _stop_command_consumer(self, session_id: str) -> None:
+		"""Stop CommandConsumer for a session (if running)."""
+		try:
+			if self._command_consumer:
+				await self._command_consumer.stop_consuming(session_id)
+				logger.info(f"CommandConsumer stopped for session: {session_id}")
+		except Exception as e:
+			logger.warning(f"Failed to stop CommandConsumer for session {session_id}: {e}")
+			# Don't fail session close if CommandConsumer fails
 
 	async def handle_browser_error(self, room_name: str, error: str) -> None:
 		"""Handle browser error and broadcast to voice agent.

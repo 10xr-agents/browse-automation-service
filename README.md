@@ -1,269 +1,331 @@
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/2ccdb752-22fb-41c7-8948-857fc1ad7e24"">
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/774a46d5-27a0-490c-b7d0-e65fcbbfa358">
-  <img alt="Shows a black Browser Use Logo in light color mode and a white one in dark color mode." src="https://github.com/user-attachments/assets/2ccdb752-22fb-41c7-8948-857fc1ad7e24"  width="full">
-</picture>
+# Browser Automation Service
 
-<div align="center">
-    <picture>
-    <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/9955dda9-ede3-4971-8ee0-91cbc3850125"">
-    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/6797d09b-8ac3-4cb9-ba07-b289e080765a">
-    <img alt="The AI browser agent." src="https://github.com/user-attachments/assets/9955dda9-ede3-4971-8ee0-91cbc3850125"  width="400">
-    </picture>
-</div>
-
-<div align="center">
-<a href="https://cloud.browser-use.com"><img src="https://media.browser-use.tools/badges/package" height="48" alt="Browser-Use Package Download Statistics"></a>
-</div>
+Production-ready browser automation service built on [Browser-Use](https://github.com/browser-use/browser-use) with Temporal workflows, LiveKit streaming, and knowledge extraction.
 
 ---
 
-<div align="center">
-<a href="#demos"><img src="https://media.browser-use.tools/badges/demos" alt="Demos"></a>
-<img width="16" height="1" alt="">
-<a href="https://docs.browser-use.com"><img src="https://media.browser-use.tools/badges/docs" alt="Docs"></a>
-<img width="16" height="1" alt="">
-<a href="https://browser-use.com/posts"><img src="https://media.browser-use.tools/badges/blog" alt="Blog"></a>
-<img width="16" height="1" alt="">
-<a href="https://browsermerch.com"><img src="https://media.browser-use.tools/badges/merch" alt="Merch"></a>
-<img width="100" height="1" alt="">
-<a href="https://github.com/browser-use/browser-use"><img src="https://media.browser-use.tools/badges/github" alt="Github Stars"></a>
-<img width="4" height="1" alt="">
-<a href="https://x.com/intent/user?screen_name=browser_use"><img src="https://media.browser-use.tools/badges/twitter" alt="Twitter"></a>
-<img width="4 height="1" alt="">
-<a href="https://link.browser-use.com/discord"><img src="https://media.browser-use.tools/badges/discord" alt="Discord"></a>
-<img width="4" height="1" alt="">
-<a href="https://cloud.browser-use.com"><img src="https://media.browser-use.tools/badges/cloud" height="48" alt="Browser-Use Cloud"></a>
-</div>
+## Quick Start
 
-</br>
+### 1. Install Dependencies
 
-🌤️ Want to skip the setup? Use our <b>[cloud](https://cloud.browser-use.com)</b> for faster, scalable, stealth-enabled browser automation!
-
-# 🤖 LLM Quickstart
-
-1. Direct your favorite coding agent (Cursor, Claude Code, etc) to [Agents.md](https://docs.browser-use.com/llms-full.txt)
-2. Prompt away!
-
-<br/>
-
-# 👋 Human Quickstart
-
-**1. Create environment with [uv](https://docs.astral.sh/uv/) (Python>=3.11):**
 ```bash
-uv init
-```
-
-**2. Install Browser-Use package:**
-```bash
-#  We ship every day - use the latest version!
-uv add browser-use
+uv venv --python 3.11
+source .venv/bin/activate
 uv sync
-```
-
-**3. Get your API key from [Browser Use Cloud](https://cloud.browser-use.com/new-api-key) and add it to your `.env` file (new signups get $10 free credits):**
-```
-# .env
-BROWSER_USE_API_KEY=your-key
-```
-
-**4. Install Chromium browser:**
-```bash
 uvx browser-use install
 ```
 
-**5. Run your first agent:**
-```python
-from browser_use import Agent, Browser, ChatBrowserUse
-import asyncio
-
-async def example():
-    browser = Browser(
-        # use_cloud=True,  # Uncomment to use a stealth browser on Browser Use Cloud
-    )
-
-    llm = ChatBrowserUse()
-
-    agent = Agent(
-        task="Find the number of stars of the browser-use repo",
-        llm=llm,
-        browser=browser,
-    )
-
-    history = await agent.run()
-    return history
-
-if __name__ == "__main__":
-    history = asyncio.run(example())
-```
-
-Check out the [library docs](https://docs.browser-use.com) and the [cloud docs](https://docs.cloud.browser-use.com) for more!
-
-<br/>
-
-# 🔥 Deploy on Sandboxes
-
-We handle agents, browsers, persistence, auth, cookies, and LLMs. The agent runs right next to the browser for minimal latency.
-
-```python
-from browser_use import Browser, sandbox, ChatBrowserUse
-from browser_use.agent.service import Agent
-import asyncio
-
-@sandbox()
-async def my_task(browser: Browser):
-    agent = Agent(task="Find the top HN post", browser=browser, llm=ChatBrowserUse())
-    await agent.run()
-
-# Just call it like any async function
-asyncio.run(my_task())
-```
-
-See [Going to Production](https://docs.browser-use.com/production) for more details.
-
-<br/>
-
-# 🚀 Template Quickstart
-
-**Want to get started even faster?** Generate a ready-to-run template:
+### 2. Start Infrastructure
 
 ```bash
-uvx browser-use init --template default
+# Temporal (workflow orchestration)
+docker run -d -p 7233:7233 -p 8233:8233 --name temporal-server temporalio/auto-setup:latest
+
+# Redis (events)
+docker run -d -p 6379:6379 --name redis redis:latest
+
+# MongoDB (storage)
+docker run -d -p 27017:27017 --name mongodb mongo:latest
 ```
 
-This creates a `browser_use_default.py` file with a working example. Available templates:
-- `default` - Minimal setup to get started quickly
-- `advanced` - All configuration options with detailed comments
-- `tools` - Examples of custom tools and extending the agent
+### 3. Configure Environment
 
-You can also specify a custom output path:
+Create `.env.local`:
+
 ```bash
-uvx browser-use init --template default --output my_agent.py
+TEMPORAL_URL=localhost:7233
+MONGODB_URI=mongodb://localhost:27017
+REDIS_URL=redis://localhost:6379
 ```
 
-<br/>
+### 4. Start Server
 
-# Demos
-
-
-### 📋 Form-Filling
-#### Task = "Fill in this job application with my resume and information."
-![Job Application Demo](https://github.com/user-attachments/assets/57865ee6-6004-49d5-b2c2-6dff39ec2ba9)
-[Example code ↗](https://github.com/browser-use/browser-use/blob/main/examples/use-cases/apply_to_job.py)
-
-
-### 🍎 Grocery-Shopping
-#### Task = "Put this list of items into my instacart."
-
-https://github.com/user-attachments/assets/a6813fa7-4a7c-40a6-b4aa-382bf88b1850
-
-[Example code ↗](https://github.com/browser-use/browser-use/blob/main/examples/use-cases/buy_groceries.py)
-
-
-### 💻 Personal-Assistant.
-#### Task = "Help me find parts for a custom PC."
-
-https://github.com/user-attachments/assets/ac34f75c-057a-43ef-ad06-5b2c9d42bf06
-
-[Example code ↗](https://github.com/browser-use/browser-use/blob/main/examples/use-cases/pcpartpicker.py)
-
-
-### 💡See [more examples here ↗](https://docs.browser-use.com/examples) and give us a star!
-
-<br/>
-
-## Integrations, hosting, custom tools, MCP, and more on our [Docs ↗](https://docs.browser-use.com)
-
-<br/>
-
-# FAQ
-
-<details>
-<summary><b>What's the best model to use?</b></summary>
-
-We optimized **ChatBrowserUse()** specifically for browser automation tasks. On avg it completes tasks 3-5x faster than other models with SOTA accuracy.
-
-**Pricing (per 1M tokens):**
-- Input tokens: $0.20
-- Cached input tokens: $0.02
-- Output tokens: $2.00
-
-For other LLM providers, see our [supported models documentation](https://docs.browser-use.com/supported-models).
-</details>
-
-
-<details>
-<summary><b>Can I use custom tools with the agent?</b></summary>
-
-Yes! You can add custom tools to extend the agent's capabilities:
-
-```python
-from browser_use import Tools
-
-tools = Tools()
-
-@tools.action(description='Description of what this tool does.')
-def custom_tool(param: str) -> str:
-    return f"Result: {param}"
-
-agent = Agent(
-    task="Your task",
-    llm=llm,
-    browser=browser,
-    tools=tools,
-)
+```bash
+uv run python navigator/start_server.py
 ```
 
-</details>
+**Service URLs**:
+- API: http://localhost:8000
+- API Docs: http://localhost:8000/docs
+- Health: http://localhost:8000/health
+- Temporal UI: http://localhost:8233
 
-<details>
-<summary><b>Can I use this for free?</b></summary>
+---
 
-Yes! Browser-Use is open source and free to use. You only need to choose an LLM provider (like OpenAI, Google, ChatBrowserUse, or run local models with Ollama).
-</details>
+## Architecture
 
-<details>
-<summary><b>How do I handle authentication?</b></summary>
+### Two Major Flows
 
-Check out our authentication examples:
-- [Using real browser profiles](https://github.com/browser-use/browser-use/blob/main/examples/browser/real_browser.py) - Reuse your existing Chrome profile with saved logins
-- If you want to use temporary accounts with inbox, choose AgentMail
-- To sync your auth profile with the remote browser, run `curl -fsSL https://browser-use.com/profile.sh | BROWSER_USE_API_KEY=XXXX sh` (replace XXXX with your API key)
+**1. Presentation/Agent Flow**
+- Real-time browser automation with video streaming
+- LiveKit WebRTC for low-latency video
+- MCP tools for agent control
+- Redis Pub/Sub for events
 
-These examples show how to maintain sessions and handle authentication seamlessly.
-</details>
+**2. Knowledge Extraction Flow**
+- Long-running website exploration
+- Temporal workflows for durability
+- Semantic analysis and graph storage
+- REST API for job management
 
-<details>
-<summary><b>How do I solve CAPTCHAs?</b></summary>
+### Key Components
 
-For CAPTCHA handling, you need better browser fingerprinting and proxies. Use [Browser Use Cloud](https://cloud.browser-use.com) which provides stealth browsers designed to avoid detection and CAPTCHA challenges.
-</details>
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  Browser Automation Service                  │
+│                                                               │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │  FastAPI Server (port 8000)                        │    │
+│  │  - REST API                                        │    │
+│  │  - MCP Tools (52 tools)                            │    │
+│  │  - WebSocket Events                                │    │
+│  └────────────┬───────────────────────────────────────┘    │
+│               │                                             │
+│  ┌────────────▼───────────────────────────────────────┐    │
+│  │  Temporal Worker (embedded)                         │    │
+│  │  - Knowledge extraction workflows                   │    │
+│  │  - Page processing activities                       │    │
+│  └────────────┬───────────────────────────────────────┘    │
+│               │                                             │
+│  ┌────────────▼───────────────────────────────────────┐    │
+│  │  Browser-Use Core                                   │    │
+│  │  - Browser automation (CDP)                         │    │
+│  │  - LiveKit streaming                                │    │
+│  └──────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
 
-<details>
-<summary><b>How do I go into production?</b></summary>
+### Data Storage
 
-Chrome can consume a lot of memory, and running many agents in parallel can be tricky to manage.
+- **MongoDB**: Sessions, pages, links, knowledge graph
+- **Redis**: Event streams, job status
+- **Temporal**: Workflow state, activity history
 
-For production use cases, use our [Browser Use Cloud API](https://cloud.browser-use.com) which handles:
-- Scalable browser infrastructure
-- Memory management
-- Proxy rotation
-- Stealth browser fingerprinting
-- High-performance parallel execution
-</details>
+---
 
-<br/>
+## Documentation
 
-<div align="center">
+We maintain **3 canonical documentation guides**:
 
-**Tell your computer what to do, and it gets it done.**
+### 1. [Quick Start & Development Guide](dev-docs/QUICK_START.md)
 
-<img src="https://github.com/user-attachments/assets/06fa3078-8461-4560-b434-445510c1766f" width="400"/>
+Development setup, server operations, troubleshooting, deployment.
 
-[![Twitter Follow](https://img.shields.io/twitter/follow/Magnus?style=social)](https://x.com/intent/user?screen_name=mamagnus00)
-&emsp;&emsp;&emsp;
-[![Twitter Follow](https://img.shields.io/twitter/follow/Gregor?style=social)](https://x.com/intent/user?screen_name=gregpr07)
+### 2. [Browser Automation Agent Guide](dev-docs/BROWSER_AUTOMATION_AGENT.md)
 
-</div>
+Agent integration reference with MCP tools (52 tools), browser actions (45+ actions), event schemas, and session lifecycle.
 
-<div align="center"> Made with ❤️ in Zurich and San Francisco </div>
+### 3. [Knowledge Extraction Guide](dev-docs/KNOWLEDGE_EXTRACTION.md)
+
+Knowledge extraction pipeline with Temporal workflows, exploration strategies, semantic analysis, storage schemas, and REST API reference.
+
+---
+
+## Quick Reference
+
+### MCP Tools (52 tools available)
+
+**Session Management**:
+- `start_browser_session`: Start browser with LiveKit streaming
+- `pause_browser_session`: Pause video publishing
+- `resume_browser_session`: Resume video publishing
+- `close_browser_session`: Close browser session
+- `get_browser_context`: Get current browser state
+- `get_screen_content`: Get DOM content
+- `find_form_fields`: Intelligent form field detection
+
+**Action Execution**:
+- `execute_action`: Execute 45+ browser actions (navigate, click, type, scroll, etc.)
+
+See [full MCP tools reference](dev-docs/BROWSER_AUTOMATION_AGENT.md#mcp-tools-reference)
+
+---
+
+### Knowledge Extraction API
+
+**Start exploration**:
+```bash
+POST /api/knowledge/explore/start
+{
+  "start_url": "https://example.com",
+  "max_pages": 100,
+  "max_depth": 3,
+  "strategy": "BFS"
+}
+```
+
+**Monitor progress**:
+```bash
+GET /api/knowledge/explore/status/{job_id}
+```
+
+**Control workflow**:
+```bash
+POST /api/knowledge/explore/pause
+POST /api/knowledge/explore/resume
+POST /api/knowledge/explore/cancel
+```
+
+See [full API reference](dev-docs/KNOWLEDGE_EXTRACTION.md#rest-api-reference)
+
+---
+
+## Production Deployment
+
+### Docker Compose
+
+```yaml
+services:
+  temporal:
+    image: temporalio/auto-setup:latest
+    ports: ["7233:7233", "8233:8233"]
+  
+  redis:
+    image: redis:latest
+    ports: ["6379:6379"]
+  
+  mongodb:
+    image: mongo:latest
+    ports: ["27017:27017"]
+    volumes:
+      - mongodb_data:/data/db
+  
+  server:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      - TEMPORAL_URL=temporal:7233
+      - MONGODB_URI=mongodb://mongodb:27017
+      - REDIS_URL=redis://redis:6379
+```
+
+### Managed Services (Recommended)
+
+- **Temporal Cloud**: https://temporal.io/cloud
+- **MongoDB Atlas**: https://cloud.mongodb.com
+- **Redis Cloud**: https://redis.com/cloud
+
+---
+
+## Key Features
+
+### Browser Automation
+- 52 MCP tools for agent control
+- 45+ browser actions (navigate, click, type, scroll, forms, etc.)
+- LiveKit WebRTC streaming
+- Intelligent form field detection
+- Error recovery and retry logic
+
+### Knowledge Extraction
+- Temporal workflows for durability
+- BFS/DFS exploration strategies
+- Semantic analysis (entities, topics, embeddings)
+- Knowledge graph storage
+- Real-time progress monitoring
+- Pause/resume/cancel support
+
+### Agent Integration
+- MCP protocol compliance
+- Redis Pub/Sub events
+- Session lifecycle management
+- Authentication patterns
+- Comprehensive error handling
+
+---
+
+## Project Structure
+
+```
+browse-automation-service/
+├── browser_use/            # Browser-Use library (upstream)
+├── navigator/              # Our extensions
+│   ├── temporal/           # Temporal workflows
+│   ├── knowledge/          # Knowledge extraction
+│   ├── server/             # FastAPI server
+│   ├── streaming/          # LiveKit streaming
+│   └── action/             # Action dispatching
+├── dev-docs/               # Documentation (3 canonical files)
+│   ├── QUICK_START.md
+│   ├── BROWSER_AUTOMATION_AGENT.md
+│   └── KNOWLEDGE_EXTRACTION.md
+├── examples/               # Usage examples
+├── tests/                  # Test suite
+└── .env.local              # Your configuration
+```
+
+---
+
+## Environment Variables
+
+### Required
+
+```bash
+TEMPORAL_URL=localhost:7233
+MONGODB_URI=mongodb://localhost:27017
+REDIS_URL=redis://localhost:6379
+```
+
+### Optional
+
+```bash
+# LLM API Keys
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=...
+
+# LiveKit (for video streaming)
+LIVEKIT_URL=wss://...
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+
+# Browser Use Cloud
+BROWSER_USE_API_KEY=...
+
+# Logging
+BROWSER_USE_LOGGING_LEVEL=info
+```
+
+---
+
+## Development
+
+### Code Organization
+
+We maintain separation between:
+- **`browser_use/`**: Browser-Use core library (upstream code)
+- **`navigator/`**: Our extensions and services
+
+See [.cursorrules](.cursorrules) for development guidelines.
+
+### Running Tests
+
+```bash
+uv run pytest tests/ci/
+```
+
+### Development Mode
+
+```bash
+uv run uvicorn navigator.server.websocket:get_app --factory --reload
+```
+
+---
+
+## Links
+
+- **Documentation**: [dev-docs/](dev-docs/)
+- **API Docs**: http://localhost:8000/docs
+- **Temporal UI**: http://localhost:8233
+- **Browser-Use**: https://github.com/browser-use/browser-use
+- **Browser-Use Docs**: https://docs.browser-use.com
+
+---
+
+## License
+
+MIT License - See [LICENSE](LICENSE)
+
+---
+
+**Version**: 1.0.0  
+**Last Updated**: 2026-01-14

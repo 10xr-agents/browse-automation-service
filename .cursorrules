@@ -39,8 +39,37 @@ This separation enables:
 │   ├── presentation/     # Presentation flow management
 │   └── ...
 │
-└── dev-docs/             # Our documentation
+└── dev-docs/             # Our documentation (3 canonical guides only)
+    ├── QUICK_START.md            # Development & server setup
+    ├── BROWSER_AUTOMATION_AGENT.md  # Agent integration reference
+    └── KNOWLEDGE_EXTRACTION.md     # Knowledge pipeline reference
 ```
+
+---
+
+## Documentation Policy
+
+**CRITICAL**: We maintain exactly **3 comprehensive documentation files**:
+
+1. **`dev-docs/QUICK_START.md`** - Development setup and server operations
+2. **`dev-docs/BROWSER_AUTOMATION_AGENT.md`** - Agent integration, MCP tools, actions
+3. **`dev-docs/KNOWLEDGE_EXTRACTION.md`** - Knowledge extraction pipeline
+
+### Documentation Rules
+
+**❌ NEVER create new documentation files** unless explicitly requested by the user
+**❌ NEVER create README files** in subdirectories (examples, tests, etc.)
+**❌ NEVER create migration guides, quickstart files, or duplicate docs
+**✅ DO update the 3 canonical guides when making significant changes
+**✅ DO focus on schemas, contracts, and architectural details (not code examples)
+**✅ DO keep documentation concise and reference-focused
+
+When user makes changes:
+- Update relevant sections in the 3 guides
+- Do NOT create new documentation files
+- Do NOT add verbose code examples (schemas/contracts only)
+
+---
 
 ### 2. Import Patterns
 
@@ -124,10 +153,10 @@ from browser_use.browser.session import BrowserSession
    - Verify no regressions: Test all major flows (presentation, knowledge retrieval)
 
 5. **Document Changes**
-   - Update `dev-docs/COMPLETE_ARCHITECTURE.md` if Browser-Use structure changed
+   - Update relevant sections in the 3 canonical documentation guides
    - Document any required changes to `navigator/` code
    - Update version in `pyproject.toml` to reflect new Browser-Use version
-   - Create upgrade notes in `dev-docs/` documenting breaking changes and migration steps
+   - Do NOT create new documentation files (migration guides, quickstarts, etc.)
 
 ### Tracking Browser-Use Modifications
 
@@ -285,10 +314,12 @@ Follow Browser-Use conventions (as defined in `CLAUDE.md`):
 
 ### 4. Documentation
 
-- **Our Docs**: Put in `dev-docs/` directory
-- **Architecture**: Document in `dev-docs/ARCHITECTURE.md`
-- **Protocol**: Document in `dev-docs/AGENT_BROWSER_COORDINATION.md`
-- **Implementation**: Document in `dev-docs/IMPLEMENTATION_GUIDE.md`
+**CRITICAL**: We maintain exactly 3 canonical documentation files:
+- **`dev-docs/QUICK_START.md`**: Development setup and server operations
+- **`dev-docs/BROWSER_AUTOMATION_AGENT.md`**: Agent integration, MCP tools, browser actions
+- **`dev-docs/KNOWLEDGE_EXTRACTION.md`**: Knowledge extraction pipeline, Temporal workflows
+
+**Never create additional documentation files.** Update these 3 guides only.
 
 ### 5. Dependencies
 

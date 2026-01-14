@@ -1,7 +1,7 @@
 [project]
 name = "browser-use"
-description = "Make websites accessible for AI agents - includes browser-use library and navigator server"
-authors = [{ name = "Gregor Zunic" }]
+description = "Browser Automation Service - Screen presenter agent with browser automation capabilities"
+authors = [{ name = "jaswanth" }]
 version = "0.11.2"
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
@@ -51,8 +51,16 @@ dependencies = [
     "livekit>=0.11.0",
     "pyjwt>=2.8.0",
     "redis>=5.0.0",
-    "rq>=1.15.0",  # Redis Queue for background job processing
-    "motor>=3.6.0",  # MongoDB async driver
+    "motor>=3.6.0", # MongoDB async driver
+    "temporalio>=1.8.0", # Temporal workflow engine
+    "python-arango>=8.2.0", # ArangoDB driver for knowledge graph
+    "markdown>=3.10",
+    "beautifulsoup4>=4.14.3",
+    "tiktoken>=0.12.0",
+    "lxml>=6.0.2",
+    "playwright>=1.57.0",
+    "robotexclusionrulesparser>=1.7.1",
+    "imageio-ffmpeg>=0.6.0",
 ]
 # google-api-core: only used for Google LLM APIs
 # pyperclip: only used for examples that use copy/paste

@@ -618,33 +618,43 @@ class BrowserAutomationMCPServer:
 		if not job_id:
 			job_id = uuid7str()
 		
-		# Store in registry (import here to avoid circular deps)
-		from navigator.knowledge.rest_api import _active_pipelines, _job_registry
-		_job_registry[job_id] = {
-			'job_id': job_id,
-			'start_url': start_url,
-			'status': 'queued',
-			'pipeline': pipeline,
-			'max_pages': max_pages,
-			'results': {},
-		}
-		_active_pipelines[job_id] = pipeline
+		# Store in registry using MongoDB-based job registry
+		from navigator.knowledge.job_registry import get_job_registry
+		job_registry = await get_job_registry()
+		await job_registry.create_job(
+			job_id=job_id,
+			start_url=start_url,
+			max_pages=max_pages,
+			max_depth=3,
+			job_type='exploration',
+			status='queued',
+		)
+		
+		# Store pipeline in memory for this session (TODO: consider persistence)
+		if not hasattr(self, '_active_pipelines'):
+			self._active_pipelines = {}
+		self._active_pipelines[job_id] = pipeline
 		
 		# Start exploration in background
 		async def run_exploration():
 			try:
-				_job_registry[job_id]['status'] = 'running'
+				job_registry = await get_job_registry()
+				await job_registry.update_job_status(job_id, 'running')
+				
 				result = await pipeline.explore_and_store(
 					start_url=start_url,
 					max_pages=max_pages,
 					job_id=job_id,
 				)
-				_job_registry[job_id]['results'] = result
-				_job_registry[job_id]['status'] = 'completed' if result.get('error') is None else 'failed'
+				
+				status = 'completed' if result.get('error') is None else 'failed'
+				await job_registry.update_job_status(job_id, status)
+				await job_registry.update_job(job_id, {'results': result})
 			except Exception as e:
 				logger.error(f"Exploration job {job_id} failed: {e}", exc_info=True)
-				_job_registry[job_id]['status'] = 'failed'
-				_job_registry[job_id]['error'] = str(e)
+				job_registry = await get_job_registry()
+				await job_registry.update_job_status(job_id, 'failed')
+				await job_registry.update_job(job_id, {'error': str(e)})
 		
 		import asyncio
 		asyncio.create_task(run_exploration())
@@ -660,7 +670,6 @@ class BrowserAutomationMCPServer:
 		if not KNOWLEDGE_AVAILABLE:
 			raise ValueError('Knowledge retrieval components not available')
 		
-		from navigator.knowledge.rest_api import _active_pipelines
 		from navigator.knowledge.job_registry import get_job_registry
 		
 		job_id = arguments.get('job_id')
@@ -672,8 +681,8 @@ class BrowserAutomationMCPServer:
 		if not job:
 			return {'error': f'Job {job_id} not found'}
 		
-		# Pipeline stored in memory, not MongoDB
-		pipeline = _active_pipelines.get(job_id)
+		# Check in-memory pipeline if available
+		pipeline = getattr(self, '_active_pipelines', {}).get(job_id)
 		results = job.get('results', {})
 		
 		if pipeline:
@@ -697,7 +706,6 @@ class BrowserAutomationMCPServer:
 		if not KNOWLEDGE_AVAILABLE:
 			raise ValueError('Knowledge retrieval components not available')
 		
-		from navigator.knowledge.rest_api import _active_pipelines
 		from navigator.knowledge.job_registry import get_job_registry
 		
 		job_id = arguments.get('job_id')
@@ -709,8 +717,8 @@ class BrowserAutomationMCPServer:
 		if not job:
 			return {'error': f'Job {job_id} not found'}
 		
-		# Pipeline stored in memory, not MongoDB
-		pipeline = _active_pipelines.get(job_id)
+		# Check in-memory pipeline if available
+		pipeline = getattr(self, '_active_pipelines', {}).get(job_id)
 		if not pipeline:
 			return {'error': 'Job not started yet'}
 		
@@ -726,7 +734,6 @@ class BrowserAutomationMCPServer:
 		if not KNOWLEDGE_AVAILABLE:
 			raise ValueError('Knowledge retrieval components not available')
 		
-		from navigator.knowledge.rest_api import _active_pipelines
 		from navigator.knowledge.job_registry import get_job_registry
 		
 		job_id = arguments.get('job_id')
@@ -738,8 +745,8 @@ class BrowserAutomationMCPServer:
 		if not job:
 			return {'error': f'Job {job_id} not found'}
 		
-		# Pipeline stored in memory, not MongoDB
-		pipeline = _active_pipelines.get(job_id)
+		# Check in-memory pipeline if available
+		pipeline = getattr(self, '_active_pipelines', {}).get(job_id)
 		if not pipeline:
 			return {'error': 'Job not started yet'}
 		
@@ -755,7 +762,6 @@ class BrowserAutomationMCPServer:
 		if not KNOWLEDGE_AVAILABLE:
 			raise ValueError('Knowledge retrieval components not available')
 		
-		from navigator.knowledge.rest_api import _active_pipelines
 		from navigator.knowledge.job_registry import get_job_registry
 		
 		job_id = arguments.get('job_id')
@@ -767,8 +773,8 @@ class BrowserAutomationMCPServer:
 		if not job:
 			return {'error': f'Job {job_id} not found'}
 		
-		# Pipeline stored in memory, not MongoDB
-		pipeline = _active_pipelines.get(job_id)
+		# Check in-memory pipeline if available
+		pipeline = getattr(self, '_active_pipelines', {}).get(job_id)
 		if pipeline:
 			success = pipeline.cancel_job()
 			if success:
@@ -809,7 +815,6 @@ class BrowserAutomationMCPServer:
 			raise ValueError('Knowledge retrieval components not available')
 		
 		from navigator.knowledge.api import KnowledgeAPI
-		from navigator.knowledge.rest_api import _active_pipelines
 		from navigator.knowledge.storage import KnowledgeStorage
 		from navigator.knowledge.vector_store import VectorStore
 		
@@ -823,11 +828,11 @@ class BrowserAutomationMCPServer:
 		storage = KnowledgeStorage(use_mongodb=True)
 		vector_store = VectorStore(use_mongodb=True)
 		
-		# Get pipeline from first available job (or create new one)
-		# Note: pipelines are stored in _active_pipelines (in-memory)
+		# Get pipeline from in-memory storage if available
 		pipeline = None
-		if _active_pipelines:
-			pipeline = next(iter(_active_pipelines.values()))
+		active_pipelines = getattr(self, '_active_pipelines', {})
+		if active_pipelines:
+			pipeline = next(iter(active_pipelines.values()))
 		
 		knowledge_api = KnowledgeAPI(
 			storage=storage,

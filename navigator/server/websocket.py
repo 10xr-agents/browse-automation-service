@@ -20,13 +20,7 @@ from navigator.streaming.broadcaster import EventBroadcaster
 
 logger = logging.getLogger(__name__)
 
-# Import knowledge retrieval REST API
-try:
-	from navigator.knowledge.rest_api import create_knowledge_router
-	KNOWLEDGE_API_AVAILABLE = True
-except ImportError:
-	KNOWLEDGE_API_AVAILABLE = False
-	logger.warning('Knowledge REST API not available. Install required dependencies.')
+# Temporal-based knowledge API is setup in _setup_knowledge_api()
 
 # Global event broadcaster instance
 event_broadcaster = EventBroadcaster()
@@ -88,52 +82,18 @@ def _setup_routes(app: FastAPI) -> None:
 	@app.get('/health')
 	async def health_check():
 		"""Health check endpoint."""
-		# Check JobManager status if available
-		job_manager_status = None
-		try:
-			if hasattr(app.state, 'job_manager'):
-				job_manager = app.state.job_manager
-				job_manager_status = job_manager.get_status()
-		except Exception as e:
-			logger.debug(f"Error getting JobManager status: {e}")
-		
-		# Check queue availability
-		try:
-			from navigator.knowledge.job_queue import get_knowledge_queue
-			queue = get_knowledge_queue()
-			queue_available = queue is not None
-		except Exception:
-			queue_available = False
-		
 		response = {
 			'status': 'ok',
 			'service': 'browser-automation-websocket',
-			'queue_available': queue_available,
 		}
-		
-		if job_manager_status:
-			response['job_manager'] = job_manager_status
-		else:
-			response['note'] = 'JobManager not available - workers must be started manually'
 		
 		return JSONResponse(response)
 	
 	@app.get('/api/knowledge/worker/status')
 	async def get_worker_status():
-		"""Get worker status and queue information."""
+		"""Get worker status and job information."""
 		try:
-			from navigator.knowledge.job_queue import get_knowledge_queue
 			from navigator.knowledge.job_registry import get_job_registry
-			
-			# Get JobManager status if available
-			job_manager_status = None
-			if hasattr(app.state, 'job_manager'):
-				job_manager = app.state.job_manager
-				job_manager_status = job_manager.get_status()
-			
-			# Check queue availability
-			queue = get_knowledge_queue()  # Sync function
-			queue_available = queue is not None
 			
 			# Count jobs by status
 			job_registry = await get_job_registry()
@@ -145,17 +105,10 @@ def _setup_routes(app: FastAPI) -> None:
 				status_counts[status] = status_counts.get(status, 0) + 1
 			
 			response = {
-				'worker_type': 'rq_auto_scaling' if job_manager_status and job_manager_status.get('enabled') else 'rq_manual',
-				'queue_available': queue_available,
-				'queue_name': 'knowledge-retrieval',
+				'worker_type': 'in_memory',
 				'job_counts': status_counts,
 				'total_jobs': len(all_jobs),
 			}
-			
-			if job_manager_status:
-				response['job_manager'] = job_manager_status
-			else:
-				response['note'] = 'JobManager not available - workers must be started manually'
 			
 			return JSONResponse(response)
 		except Exception as e:
@@ -451,261 +404,21 @@ def _setup_routes(app: FastAPI) -> None:
 
 
 def _setup_knowledge_api(app: FastAPI) -> None:
-	"""Setup knowledge retrieval REST API routes."""
-	if not KNOWLEDGE_API_AVAILABLE:
-		logger.warning('Knowledge REST API not available, skipping setup')
-		return
-	
-	def create_pipeline_factory():
-		"""Factory function to create KnowledgePipeline instances.
+	"""Setup knowledge extraction REST API routes (Phase 6)."""
+	try:
+		from navigator.knowledge.api_v2 import create_knowledge_api_router
 		
-		Creates a pipeline with a browser session from the session manager.
-		For knowledge retrieval, we use a dedicated browser session.
-		"""
-		from browser_use import BrowserSession
-		from browser_use.browser.profile import BrowserProfile
-		from navigator.knowledge.pipeline import KnowledgePipeline
-		from navigator.knowledge.progress_observer import (
-			CompositeProgressObserver,
-			LoggingProgressObserver,
-		)
-		
-		# Try to get Redis observer if available
-		observers = [LoggingProgressObserver()]
-		
-		try:
-			import os
-			import redis.asyncio as redis
-			redis_url = os.getenv("REDIS_URL")
-			if not redis_url:
-				raise ValueError("REDIS_URL not set in environment variables. Please set it in .env.local")
-			redis_client = redis.from_url(redis_url, decode_responses=False)
-			from navigator.knowledge.progress_observer import RedisProgressObserver
-			redis_observer = RedisProgressObserver(redis_client=redis_client)
-			observers.append(redis_observer)
-			logger.info('Redis progress observer enabled')
-		except Exception as e:
-			logger.debug(f'Redis not available for progress observer: {e}')
-		
-		# Create composite observer
-		progress_observer = CompositeProgressObserver(observers)
-		
-		async def create_pipeline():
-			"""Create a new pipeline instance with a fresh browser session."""
-			# Create browser session for knowledge retrieval
-			profile = BrowserProfile(headless=True, user_data_dir=None, keep_alive=True)
-			browser_session = BrowserSession(browser_profile=profile)
-			
-			# Start browser session (async context)
-			await browser_session.start()
-			await browser_session.attach_all_watchdogs()
-			
-			return KnowledgePipeline(
-				browser_session=browser_session,
-				progress_observer=progress_observer,
-			)
-		
-		return create_pipeline
-	
-	# Create and include knowledge router
-	# Pipeline factory returns async function, which is fine for REST API (endpoints are async)
-	router = create_knowledge_router(pipeline_factory=create_pipeline_factory)
-	if router:
-		app.include_router(router)
-		logger.info('Knowledge retrieval REST API routes registered')
-		
-		# Initialize and start JobManager for auto-scaling RQ workers
-		@app.on_event("startup")
-		async def start_job_manager():
-			"""Start JobManager for auto-scaling RQ workers."""
-			try:
-				from navigator.knowledge.worker_manager import get_job_manager, JobTypeConfig
-				import os
-				
-				redis_url = os.getenv("REDIS_URL")
-				if not redis_url:
-					logger.warning("⚠️  [Startup] REDIS_URL not set - JobManager disabled")
-					logger.warning("   Please set REDIS_URL in your .env.local file")
-					# Still start stuck job monitor
-					_start_stuck_job_monitor()
-					return
-				
-				# Get or create JobManager with default configuration
-				job_manager = get_job_manager(
-					redis_url=redis_url,
-					job_types=[
-						JobTypeConfig(
-							queue_name="knowledge-retrieval",
-							min_workers=1,
-							max_workers=5,
-							scale_up_threshold=5,
-							scale_down_threshold=0,
-						)
-					],
-				)
-				
-				# Start JobManager
-				await job_manager.start()
-				
-				# Store reference for shutdown
-				app.state.job_manager = job_manager
-				
-			except Exception as e:
-				logger.error(f"❌ [Startup] Failed to start JobManager: {e}", exc_info=True)
-				logger.warning("⚠️  [Startup] RQ workers will NOT be managed automatically")
-				logger.warning("   You must start workers manually: rq worker knowledge-retrieval")
-			
-			# Start background task to check for stuck jobs (timeout mechanism)
-			_start_stuck_job_monitor()
-		
-		def _start_stuck_job_monitor():
-			"""Start background task to monitor stuck jobs."""
-			import asyncio
-			from navigator.knowledge.job_registry import get_job_registry
-			from navigator.knowledge.job_queue import get_redis_client, RQ_AVAILABLE
-			from datetime import datetime, timezone
-			
-			async def monitor_stuck_jobs():
-				"""Check for jobs stuck in queued or running status for too long."""
-				# Wait a bit before starting monitoring
-				await asyncio.sleep(10)  # Give jobs time to start
-				
-				# Timeout for queued jobs: 2 minutes (120 seconds)
-				# RQ workers should pick up jobs within seconds, so 2 minutes is reasonable
-				QUEUED_JOB_TIMEOUT_SECONDS = 120
-				
-				# Timeout for running/exploring jobs: 30 minutes (1800 seconds)
-				# Jobs can take a long time, but if they're not updating progress, they're likely stuck
-				RUNNING_JOB_TIMEOUT_SECONDS = 1800  # 30 minutes
-				
-				logger.info("🔍 Stuck job monitor started (checks every 30s)")
-				logger.info(f"   Queued job timeout: {QUEUED_JOB_TIMEOUT_SECONDS}s")
-				logger.info(f"   Running job timeout: {RUNNING_JOB_TIMEOUT_SECONDS}s")
-				
-				while True:
-					try:
-						await asyncio.sleep(30)  # Check every 30 seconds
-						
-						job_registry = await get_job_registry()
-						all_jobs = await job_registry.list_jobs()
-						
-						now = datetime.now(timezone.utc)
-						stuck_count = 0
-						cancelled_count = 0
-						
-						for job in all_jobs:
-							status = job.get('status', 'unknown')
-							job_id = job.get('job_id')
-							created_at = job.get('created_at')
-							updated_at = job.get('updated_at')
-							
-							# Use updated_at for running jobs, created_at for queued jobs
-							if status in ('running', 'exploring'):
-								check_time = updated_at if updated_at else created_at
-							else:
-								check_time = created_at if created_at else updated_at
-							
-							if not check_time:
-								continue
-							
-							# Handle both timezone-aware and naive datetimes
-							if isinstance(check_time, str):
-								from dateutil.parser import parse as parse_date
-								check_time = parse_date(check_time)
-							if isinstance(check_time, datetime):
-								if check_time.tzinfo is None:
-									# Naive datetime - assume UTC
-									check_time = check_time.replace(tzinfo=timezone.utc)
-								
-								time_elapsed = (now - check_time).total_seconds()
-								
-								# Check for jobs stuck in queued/pending status
-								if status in ('queued', 'pending'):
-									if time_elapsed > QUEUED_JOB_TIMEOUT_SECONDS:
-										logger.warning(f"⏰ Job {job_id} stuck in '{status}' status for {time_elapsed:.0f} seconds - marking as failed")
-										await job_registry.update_job(
-											job_id,
-											{
-												'status': 'failed',
-												'error': f'Job timeout: Stuck in {status} status for {time_elapsed:.0f} seconds. Worker may not be processing jobs.',
-											}
-										)
-										stuck_count += 1
-								
-								# Check for jobs stuck in running/exploring status (not updating)
-								elif status in ('running', 'exploring'):
-									if time_elapsed > RUNNING_JOB_TIMEOUT_SECONDS:
-										logger.warning(f"⏰ Job {job_id} stuck in '{status}' status for {time_elapsed:.0f} seconds - cancelling")
-										
-										# Try to cancel RQ job if available
-										if RQ_AVAILABLE:
-											try:
-												from rq.job import Job as RQJob
-												redis_client = get_redis_client()
-												if redis_client:
-													try:
-														rq_job = RQJob.fetch(job_id, connection=redis_client)
-														rq_status = rq_job.get_status()
-														if rq_status in ('queued', 'started', 'deferred'):
-															logger.info(f"🛑 Cancelling RQ job {job_id} (RQ status: {rq_status})")
-															rq_job.cancel()
-															if rq_status == 'started':
-																try:
-																	rq_job.stop()  # Try to stop running job
-																except Exception:
-																	pass
-													except Exception as rq_error:
-														logger.debug(f"Could not cancel RQ job {job_id}: {rq_error}")
-											except Exception as e:
-												logger.warning(f"Error cancelling RQ job: {e}")
-										
-										# Update job status to cancelled
-										await job_registry.update_job(
-											job_id,
-											{
-												'status': 'cancelled',
-												'error': f'Job timeout: Stuck in {status} status for {time_elapsed:.0f} seconds without progress. Job cancelled automatically.',
-											}
-										)
-										cancelled_count += 1
-						
-						if stuck_count > 0:
-							logger.warning(f"⏰ Marked {stuck_count} stuck job(s) as failed due to timeout")
-						if cancelled_count > 0:
-							logger.warning(f"🛑 Cancelled {cancelled_count} stuck running job(s) due to timeout")
-					except Exception as e:
-						logger.error(f"Error in stuck job monitor: {e}", exc_info=True)
-						await asyncio.sleep(60)  # Wait longer on error
-			
-			# Start monitoring in background
-			asyncio.create_task(monitor_stuck_jobs())
-		
-		@app.on_event("shutdown")
-		async def cleanup_on_shutdown():
-			"""Cleanup JobManager and RQ connections on app shutdown."""
-			logger.info("=" * 80)
-			logger.info("🛑 [Shutdown] Cleaning up...")
-			logger.info("=" * 80)
-			
-			# Stop JobManager first (stops workers gracefully)
-			try:
-				if hasattr(app.state, 'job_manager'):
-					job_manager = app.state.job_manager
-					await job_manager.stop(timeout=30)
-			except Exception as e:
-				logger.error(f"❌ [Shutdown] Error stopping JobManager: {e}", exc_info=True)
-			
-			# Close RQ connections
-			try:
-				from navigator.knowledge.job_queue import close_connections
-				close_connections()  # Sync function
-				logger.info("✅ [Shutdown] RQ connections closed successfully")
-			except Exception as e:
-				logger.warning(f"⚠️  [Shutdown] Error closing connections: {e}")
-			
-			logger.info("=" * 80)
-	else:
-		logger.warning('Failed to create knowledge router')
+		router = create_knowledge_api_router()
+		if router:
+			app.include_router(router)
+			logger.info('✅ Knowledge extraction API registered (Phase 6)')
+		else:
+			logger.error('❌ Failed to create knowledge API router')
+	except ImportError as e:
+		logger.error(f'❌ Knowledge API not available: {e}')
+		logger.error('   Please install required dependencies: uv sync')
+	except Exception as e:
+		logger.error(f'❌ Failed to setup knowledge API: {e}', exc_info=True)
 
 
 def get_event_broadcaster() -> EventBroadcaster:
