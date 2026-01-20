@@ -9,9 +9,16 @@ Extracts structured knowledge from ingested content:
 - IteratorExtractor: Iterator and logic extraction
 - BusinessFunctionExtractor: Business functions from video content (NEW)
 - WorkflowExtractor: Operational workflows from video content (NEW)
+- ActionTranslator: Translates ActionDefinition to BrowserUseAction (Phase 2)
 """
 
 from navigator.knowledge.extract.actions import ActionExtractor
+from navigator.knowledge.extract.browser_use_mapping import (
+	ActionTranslator,
+	BrowserUseAction,
+	translate_actions_to_browser_use,
+	translate_to_browser_use,
+)
 from navigator.knowledge.extract.business_functions import BusinessFunctionExtractor
 from navigator.knowledge.extract.entities import EntityExtractor
 from navigator.knowledge.extract.iterators import IteratorExtractor
@@ -31,4 +38,9 @@ __all__ = [
 	'ReferenceResolver',
 	'BusinessFunctionExtractor',
 	'WorkflowExtractor',
+	# Phase 2: Browser-Use Mapping
+	'BrowserUseAction',
+	'ActionTranslator',
+	'translate_to_browser_use',
+	'translate_actions_to_browser_use',
 ]

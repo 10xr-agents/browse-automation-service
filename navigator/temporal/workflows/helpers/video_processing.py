@@ -120,8 +120,36 @@ async def ingest_video_with_sub_activities(
 	duplicate_map = filter_result.duplicate_map
 	metadata = filter_result.metadata  # Extracted metadata
 
+	workflow.logger.info(
+		f"📊 Frame filtering results: {len(filtered_frames)} unique frames, "
+		f"{len(all_frame_paths)} total frames (after SSIM deduplication)"
+	)
+	
+	# Detailed diagnostics
+	if filtered_frames:
+		workflow.logger.info(
+			f"✅ Frame analysis will proceed with {len(filtered_frames)} frames "
+			f"(from {len(all_frame_paths)} total extracted frames)"
+		)
+		# Log sample frames for debugging
+		sample_size = min(3, len(filtered_frames))
+		sample = filtered_frames[:sample_size]
+		workflow.logger.info(
+			f"📸 Sample frames to analyze (first {sample_size}): "
+			f"{[(ts, path[:60] + '...' if len(path) > 60 else path) for ts, path in sample]}"
+		)
+
 	if not filtered_frames:
-		workflow.logger.warning("⚠️ No frames to analyze after filtering")
+		workflow.logger.error(
+			f"❌ CRITICAL: No frames to analyze after filtering! "
+			f"Total frames extracted: {len(all_frame_paths)}, "
+			f"Filtered frames: {len(filtered_frames)}. "
+			f"This will skip frame analysis entirely. "
+			f"Possible causes: "
+			f"1. All frames filtered out by SSIM deduplication (check SSIM threshold), "
+			f"2. Frame mapping error (check frame_filtering activity logs), "
+			f"3. Frame upload failures (check storage configuration)"
+		)
 		# Still assemble and persist result with transcription if available
 		# This ensures transcription chunks are persisted even without frames
 		workflow.logger.info("🔧 Assembling video ingestion result (transcription only, no frames)...")
@@ -170,9 +198,10 @@ async def ingest_video_with_sub_activities(
 			errors=[] if assembly_result.content_chunks > 0 else ["No frames to analyze"],
 		)
 
-	# Split frames into batches (10 frames per batch)
-	# This is a lightweight operation, but yield if processing many frames
-	batch_size = 10
+	# Split frames into batches (20 frames per batch for optimal Gemini throughput)
+	# Larger batches = better API utilization and lower latency per frame
+	# Each batch processes frames in parallel within the activity
+	batch_size = 20
 	batches = []
 	for i in range(0, len(filtered_frames), batch_size):
 		batches.append(filtered_frames[i:i + batch_size])
@@ -180,9 +209,20 @@ async def ingest_video_with_sub_activities(
 		if i > 0 and (i // batch_size) % 50 == 0:
 			await workflow.sleep(timedelta(seconds=0))
 
+	total_frames = len(filtered_frames)
+	total_batches = len(batches)
 	workflow.logger.info(
-		f"🔍 Processing {len(filtered_frames)} frames in {len(batches)} batch(es)"
+		f"🔍 Processing {total_frames} frames in {total_batches} batch(es) "
+		f"(batch_size={batch_size} frames per batch for optimal Gemini throughput)"
 	)
+	
+	# Validate that we have frames before processing
+	if len(filtered_frames) == 0:
+		workflow.logger.error(
+			"❌ CRITICAL: filtered_frames is empty - frame analysis will be skipped! "
+			"This should not happen if filter_result.filtered_frame_paths was populated correctly."
+		)
+		# Still proceed to assembly to preserve transcription
 
 	# S3 prefix for batch results (Claim Check pattern - avoids passing large data through Temporal history)
 	results_s3_prefix = f"results/{ingestion_id}"
@@ -192,10 +232,17 @@ async def ingest_video_with_sub_activities(
 	# Processing batches one at a time ensures proper yielding
 	batch_results = []
 
+	# Track total frames processed across all batches
+	frames_processed = 0
+	
 	for batch_idx, batch in enumerate(batches):
+		frames_in_batch = len(batch)
+		frames_processed += frames_in_batch
+		
 		workflow.logger.info(
-			f"🔄 Processing batch {batch_idx + 1}/{len(batches)}: "
-			f"{len(batch)} frames"
+			f"🔄 Processing batch {batch_idx + 1}/{total_batches}: "
+			f"{frames_in_batch} frames (Progress: {frames_processed}/{total_frames} frames, "
+			f"{100 * frames_processed / total_frames:.1f}%)"
 		)
 
 		# Yield control before starting activity to prevent deadlock
@@ -203,6 +250,11 @@ async def ingest_video_with_sub_activities(
 
 		# Execute batch activity (workflow yields here during activity execution)
 		try:
+			workflow.logger.info(
+				f"🔵 Starting frame analysis batch {batch_idx + 1}/{total_batches}: "
+				f"{frames_in_batch} frames to analyze with vision models "
+				f"(Overall: {frames_processed}/{total_frames} frames, {100 * frames_processed / total_frames:.1f}%)"
+			)
 			batch_result = await workflow.execute_activity(
 				analyze_frames_batch_activity,
 				AnalyzeFramesBatchInput(
@@ -214,9 +266,14 @@ async def ingest_video_with_sub_activities(
 				),
 				**activity_options,
 			)
+			workflow.logger.info(
+				f"✅ Frame analysis batch {batch_idx + 1}/{total_batches} completed: "
+				f"success={batch_result.success}, frames_analyzed={batch_result.frame_count}/{frames_in_batch} "
+				f"(Overall: {frames_processed}/{total_frames} frames, {100 * frames_processed / total_frames:.1f}%)"
+			)
 			batch_results.append(batch_result)
 		except Exception as e:
-			workflow.logger.warning(f"⚠️ Batch {batch_idx} failed: {e}")
+			workflow.logger.error(f"❌ Batch {batch_idx + 1}/{total_batches} failed with exception: {e}", exc_info=True)
 			batch_results.append(e)
 
 	# Collect S3 keys from batch results (Claim Check pattern - pass references, not data)
@@ -230,7 +287,7 @@ async def ingest_video_with_sub_activities(
 		if isinstance(result, Exception):
 			workflow.logger.warning(f"⚠️ Batch {i} failed: {result}")
 			continue
-		if result.success:
+		if result.success and result.s3_key:  # Only add non-empty S3 keys
 			analysis_result_s3_keys.append(result.s3_key)  # Store S3 key, not data
 
 	workflow.logger.info(f"📤 Collected {len(analysis_result_s3_keys)} batch result S3 keys (Claim Check pattern)")

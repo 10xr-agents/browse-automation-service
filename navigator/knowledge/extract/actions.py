@@ -8,6 +8,7 @@ Extracts atomic action definitions with:
 - Error handling and idempotency
 """
 
+import hashlib
 import logging
 import re
 from typing import Any
@@ -343,11 +344,28 @@ class ActionExtractor:
 		return f".{selector}"
 
 	def _generate_action_id(self, action_type: str, target: str) -> str:
-		"""Generate action ID."""
+		"""
+		Generate short action ID from action type and target.
+		
+		Uses a hash-based approach to keep IDs short while maintaining uniqueness.
+		The full name is preserved in the `name` field for human readability.
+		"""
+		# Sanitize target
 		target_id = target.lower().strip()
 		target_id = re.sub(r'[^\w\s-]', '', target_id)
 		target_id = re.sub(r'[-\s]+', '_', target_id)
-		return f"{action_type}_{target_id}"
+		
+		# Truncate to first 30 chars to avoid extremely long inputs
+		target_id = target_id[:30]
+		
+		# Generate hash and take first 8 characters for short ID
+		full_id = f"{action_type}_{target_id}"
+		hash_obj = hashlib.md5(full_id.encode('utf-8'))
+		hash_suffix = hash_obj.hexdigest()[:8]
+		
+		# Use first 20 chars of action_type + target + hash for readability + uniqueness
+		prefix = f"{action_type}_{target_id[:20]}".rstrip('_')
+		return f"{prefix}_{hash_suffix}" if prefix else f"action_{hash_suffix}"
 
 	def _deduplicate_actions(self, actions: list[ActionDefinition]) -> list[ActionDefinition]:
 		"""Deduplicate actions by action_id."""

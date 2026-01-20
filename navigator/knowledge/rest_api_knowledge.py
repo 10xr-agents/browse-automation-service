@@ -32,6 +32,16 @@ from navigator.knowledge.persist.state import record_workflow_error, load_workfl
 
 logger = logging.getLogger(__name__)
 
+# Phase 3: Agent Communication
+if FASTAPI_AVAILABLE:
+	from navigator.knowledge.agent_communication import (
+		AgentInstruction,
+		AgentResponse,
+		ScreenRecognitionService,
+	)
+	from navigator.knowledge.extract.browser_use_mapping import translate_to_browser_use
+	from navigator.knowledge.persist.navigation import get_navigation_path
+
 
 def register_knowledge_routes(router: APIRouter) -> None:
 	"""
@@ -408,3 +418,229 @@ def register_knowledge_routes(router: APIRouter) -> None:
 		except Exception as e:
 			logger.error(f"Failed to get knowledge by knowledge_id: {e}")
 			raise HTTPException(status_code=500, detail=f"Failed to retrieve knowledge: {str(e)}")
+	
+	# ========================================================================
+	# Phase 3: Agent Communication API
+	# ========================================================================
+	
+	@router.post("/knowledge/{knowledge_id}/query", response_model=dict)
+	async def query_knowledge_for_agent(
+		knowledge_id: str,
+		instruction: AgentInstruction
+	) -> dict:
+		"""
+		Agent-friendly knowledge query endpoint (Phase 3).
+		
+		Query types:
+		- "navigate_to_screen": Get navigation instructions to a screen
+		- "execute_task": Get task execution steps
+		- "find_screen": Find screen by URL or description
+		- "get_actions": Get available actions on current screen
+		- "get_screen_context": Get complete context for a screen
+		
+		Returns browser-use actions ready for execution.
+		"""
+		try:
+			from navigator.knowledge.extract.actions import ActionDefinition
+			from navigator.knowledge.extract.browser_use_mapping import (
+				ActionTranslator,
+			)
+			from navigator.knowledge.extract.tasks import TaskStep
+			
+			# Ensure instruction has correct knowledge_id
+			if instruction.knowledge_id != knowledge_id:
+				raise HTTPException(
+					status_code=400,
+					detail=f"Knowledge ID mismatch: instruction has {instruction.knowledge_id}, URL has {knowledge_id}"
+				)
+			
+			response = AgentResponse(success=False)
+			
+			if instruction.instruction_type == "navigate_to_screen":
+				# Get navigation path
+				current_url = instruction.context.get("current_url")
+				current_screen_id = instruction.context.get("current_screen_id")
+				target_screen_id = instruction.target
+				
+				# Find current screen if not provided
+				if not current_screen_id and current_url:
+					recognition_service = ScreenRecognitionService()
+					recognition_result = await recognition_service.recognize_screen(
+						current_url,
+						instruction.context.get("dom_summary", ""),
+						knowledge_id
+					)
+					current_screen_id = recognition_result.get("screen_id")
+				
+				if not current_screen_id:
+					response.error = "Could not determine current screen. Provide current_url or current_screen_id in context."
+					return response.dict()
+				
+				# Get navigation path
+				path_result = await get_navigation_path(
+					current_screen_id,
+					target_screen_id,
+					knowledge_id
+				)
+				
+				if not path_result.get("path"):
+					response.error = f"No path found from screen {current_screen_id} to {target_screen_id}"
+					return response.dict()
+				
+				# Translate transitions to browser-use actions
+				translator = ActionTranslator()
+				actions = []
+				
+				for step in path_result.get("steps", []):
+					# Extract action from step
+					if "action" in step:
+						action_data = step["action"]
+						# Create temporary ActionDefinition for translation
+						action_def = ActionDefinition(
+							action_id=action_data.get("action_id", ""),
+							name=action_data.get("action_name", ""),
+							website_id="",  # Not needed for translation
+							action_type=action_data.get("action_type", "click"),
+							target_selector=action_data.get("target", ""),
+							parameters=action_data.get("parameters", {})
+						)
+						browser_action = translator.translate_action(
+							action_def,
+							screen_id=step.get("to_screen_id")
+						)
+						actions.append(browser_action)
+				
+				# Get target screen for verification
+				target_screen = await get_screen(target_screen_id)
+				verification = {}
+				if target_screen:
+					verification = {
+						"url_patterns": target_screen.url_patterns,
+						"required_indicators": [
+							{
+								"type": ind.type,
+								"value": ind.value,
+								"pattern": ind.pattern
+							}
+							for ind in target_screen.state_signature.required_indicators[:5]  # Limit to 5
+						]
+					}
+				
+				response = AgentResponse(
+					success=True,
+					actions=actions,
+					expected_result={
+						"screen_id": target_screen_id,
+						"screen_name": target_screen.name if target_screen else None,
+						"verification": verification
+					}
+				)
+			
+			elif instruction.instruction_type == "execute_task":
+				# Get task
+				task = await get_task(instruction.target)
+				
+				if not task:
+					response.error = f"Task not found: {instruction.target}"
+					return response.dict()
+				
+				# Translate task steps to browser-use actions
+				translator = ActionTranslator()
+				actions = []
+				
+				for step in task.steps:
+					if isinstance(step, TaskStep) and step.action:
+						browser_action = translator.translate_action(
+							step.action,
+							screen_id=step.screen_id
+						)
+						actions.append(browser_action)
+				
+				response = AgentResponse(
+					success=True,
+					actions=actions,
+					expected_result={
+						"task_id": task.task_id,
+						"task_name": task.name,
+						"success_criteria": getattr(task, 'success_criteria', None)
+					}
+				)
+			
+			elif instruction.instruction_type == "find_screen":
+				# Find screen by URL or description
+				current_url = instruction.context.get("current_url") or instruction.target
+				
+				recognition_service = ScreenRecognitionService()
+				recognition_result = await recognition_service.recognize_screen(
+					current_url,
+					instruction.context.get("dom_summary", ""),
+					knowledge_id
+				)
+				
+				if recognition_result.get("screen_id"):
+					response = AgentResponse(
+						success=True,
+						actions=[],  # No actions needed, just recognition
+						expected_result=recognition_result
+					)
+				else:
+					response.error = f"Screen not found for URL: {current_url}"
+			
+			elif instruction.instruction_type == "get_actions":
+				# Get available actions on current screen
+				current_screen_id = instruction.context.get("current_screen_id")
+				if not current_screen_id:
+					# Try to recognize screen from URL
+					current_url = instruction.context.get("current_url")
+					if current_url:
+						recognition_service = ScreenRecognitionService()
+						recognition_result = await recognition_service.recognize_screen(
+							current_url,
+							instruction.context.get("dom_summary", ""),
+							knowledge_id
+						)
+						current_screen_id = recognition_result.get("screen_id")
+				
+				if not current_screen_id:
+					response.error = "Could not determine current screen. Provide current_screen_id or current_url in context."
+					return response.dict()
+				
+				# Get available actions
+				recognition_service = ScreenRecognitionService()
+				available_actions = await recognition_service._get_available_actions(
+					current_screen_id,
+					knowledge_id
+				)
+				
+				response = AgentResponse(
+					success=True,
+					actions=[],  # Raw action data, not browser-use actions
+					expected_result={
+						"screen_id": current_screen_id,
+						"available_actions": available_actions
+					}
+				)
+			
+			elif instruction.instruction_type == "get_screen_context":
+				# Get complete screen context
+				screen_id = instruction.target
+				from navigator.knowledge.persist.navigation import get_screen_context
+				
+				context = await get_screen_context(screen_id, knowledge_id)
+				
+				response = AgentResponse(
+					success=True,
+					actions=[],
+					expected_result=context
+				)
+			
+			return response.dict()
+		
+		except HTTPException:
+			raise
+		except Exception as e:
+			logger.error(f"Failed to query knowledge for agent: {e}", exc_info=True)
+			raise HTTPException(
+				status_code=500,
+				detail=f"Failed to process agent query: {str(e)}"
+			)

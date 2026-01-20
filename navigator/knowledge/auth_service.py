@@ -235,8 +235,9 @@ class AuthenticationService:
 							'logged_in_url': None,
 						}
 
-					# Wait for page to load
-					await asyncio.sleep(2)
+					# Wait for page to fully load and stabilize
+					logger.info("⏳ Waiting for login page to fully load...")
+					await asyncio.sleep(6)
 
 			# Find form fields
 			username_index, password_index, submit_index = await self.find_form_fields(
@@ -278,8 +279,9 @@ class AuthenticationService:
 					'logged_in_url': None,
 				}
 
-			# Wait a bit
-			await asyncio.sleep(0.5)
+			# Wait for username field to stabilize and any UI updates
+			logger.info("⏳ Waiting after username input...")
+			await asyncio.sleep(4.5)
 
 			# Fill password field
 			logger.info("Filling password field")
@@ -297,13 +299,36 @@ class AuthenticationService:
 					'logged_in_url': None,
 				}
 
-			# Wait a bit
-			await asyncio.sleep(0.5)
+			# Wait for password field to stabilize and any UI updates
+			logger.info("⏳ Waiting after password input...")
+			await asyncio.sleep(4.5)
+
+			# Re-verify submit button index before clicking (DOM might have changed)
+			logger.info("🔍 Re-verifying submit button index before clicking...")
+			_, _, verified_submit_index = await self.find_form_fields(
+				credentials.username,
+				credentials.password,
+			)
+			
+			# Use verified index if available, otherwise fall back to original
+			final_submit_index = verified_submit_index if verified_submit_index is not None else submit_index
+			
+			if final_submit_index != submit_index:
+				logger.warning(
+					f"⚠️ Submit button index changed: original={submit_index}, verified={verified_submit_index}. "
+					f"Using verified index: {final_submit_index}"
+				)
+			else:
+				logger.info(f"✅ Submit button index verified: {final_submit_index} (unchanged)")
+
+			# Wait before clicking submit button to ensure form is ready
+			logger.info("⏳ Waiting before clicking submit button...")
+			await asyncio.sleep(4.0)
 
 			# Submit form
-			if submit_index is not None:
-				logger.info("Clicking submit button")
-				submit_action = ClickActionCommand(params={'index': submit_index})
+			if final_submit_index is not None:
+				logger.info(f"Clicking submit button (index: {final_submit_index})")
+				submit_action = ClickActionCommand(params={'index': final_submit_index})
 				submit_result = await self.action_dispatcher.execute_action(submit_action)
 				if not submit_result.success:
 					return {

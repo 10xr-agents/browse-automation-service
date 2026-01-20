@@ -8,6 +8,7 @@ Extracts screen definitions with critical focus on:
 - UI element identification with affordances
 """
 
+import hashlib
 import logging
 import re
 from typing import Any
@@ -127,6 +128,16 @@ class ScreenDefinition(BaseModel):
 		default_factory=list,
 		description="Workflow IDs that include this screen"
 	)
+	
+	# Content type classification (Phase 1: Content Type Separation)
+	content_type: str = Field(
+		default="web_ui",
+		description="Content type: 'web_ui' | 'documentation' | 'video_transcript' | 'api_docs'"
+	)
+	is_actionable: bool = Field(
+		default=True,
+		description="Whether this screen can be navigated to by browser automation"
+	)
 
 	@field_validator('url_patterns')
 	@classmethod
@@ -137,6 +148,15 @@ class ScreenDefinition(BaseModel):
 				re.compile(pattern)
 			except re.error as e:
 				raise ValueError(f"Invalid regex pattern '{pattern}': {e}")
+		return v
+	
+	@field_validator('content_type')
+	@classmethod
+	def validate_content_type(cls, v: str) -> str:
+		"""Validate content type."""
+		valid_types = ['web_ui', 'documentation', 'video_transcript', 'api_docs', 'unknown']
+		if v not in valid_types:
+			raise ValueError(f"Invalid content_type: {v}. Must be one of {valid_types}")
 		return v
 
 
@@ -174,6 +194,11 @@ class ScreenExtractionResult(BaseModel):
 				sum(len(s.state_signature.negative_indicators) for s in self.screens) / len(self.screens)
 				if self.screens else 0
 			),
+			# Content type statistics (Phase 1)
+			'web_ui_screens': sum(1 for s in self.screens if s.content_type == "web_ui"),
+			'documentation_screens': sum(1 for s in self.screens if s.content_type == "documentation"),
+			'actionable_screens': sum(1 for s in self.screens if s.is_actionable),
+			'non_actionable_screens': sum(1 for s in self.screens if not s.is_actionable),
 		}
 
 
@@ -220,6 +245,18 @@ class ScreenExtractor:
 
 			for chunk in content_chunks:
 				screens = self._extract_screens_from_chunk(chunk)
+				
+				# Classify screens and set content_type and is_actionable
+				for screen in screens:
+					is_web_ui = self._is_web_ui_screen(chunk.content, screen.name)
+					if is_web_ui:
+						screen.content_type = "web_ui"
+						screen.is_actionable = True
+					else:
+						screen.content_type = "documentation"
+						screen.is_actionable = False
+						logger.debug(f"Filtered documentation screen: {screen.screen_id} ({screen.name[:50]}...)")
+				
 				result.screens.extend(screens)
 
 			# Deduplicate screens
@@ -238,9 +275,15 @@ class ScreenExtractor:
 			# Calculate statistics
 			result.calculate_statistics()
 
+			# Count actionable vs non-actionable screens
+			actionable_count = sum(1 for s in result.screens if s.is_actionable)
+			web_ui_count = sum(1 for s in result.screens if s.content_type == "web_ui")
+			doc_count = sum(1 for s in result.screens if s.content_type == "documentation")
+
 			logger.info(
 				f"✅ Extracted {result.statistics['total_screens']} screens "
-				f"({result.statistics['screens_with_negative_indicators']} with negative indicators)"
+				f"({result.statistics['screens_with_negative_indicators']} with negative indicators) - "
+				f"{web_ui_count} web UI (actionable: {actionable_count}), {doc_count} documentation"
 			)
 
 		except Exception as e:
@@ -288,6 +331,57 @@ class ScreenExtractor:
 
 		return screens
 
+	def _is_web_ui_screen(self, context: str, screen_name: str) -> bool:
+		"""
+		Determine if this is a web UI screen or documentation.
+		
+		Args:
+			context: Full context text from content chunk
+			screen_name: Name of the screen
+		
+		Returns:
+			True if this is a web UI screen, False if documentation
+		"""
+		# Documentation indicators (voice AI, conversational, instructional)
+		doc_indicators = [
+			"conversational", "phone call", "voice assistant", "voice ai",
+			"follow-up questions", "empathetic listener", "conversation",
+			"instruction", "guideline", "protocol", "how to",
+			"your primary goal", "you should", "you must",
+			"baseline emotional profile", "emotional intelligence",
+			"core goal", "primary goal", "secondary goal"
+		]
+		
+		context_lower = context.lower()
+		name_lower = screen_name.lower()
+		
+		# If contains documentation keywords, it's not a web UI screen
+		if any(indicator in context_lower or indicator in name_lower 
+		       for indicator in doc_indicators):
+			return False
+		
+		# Web UI indicators
+		ui_indicators = [
+			"dashboard", "form", "button", "input", "navigation",
+			"page", "screen", "modal", "dialog", "menu", "link",
+			"submit", "click", "navigate", "url", "route"
+		]
+		
+		# Must have URL pattern or UI element mentions
+		has_url = bool(re.search(r'https?://[^\s<>"{}|\\^`\[\]]+|/[\w/-]+', context))
+		has_ui = any(indicator in context_lower or indicator in name_lower 
+		            for indicator in ui_indicators)
+		
+		# Check for actual URL patterns (not generic paths)
+		url_patterns = self._extract_url_patterns(context)
+		has_specific_url = any(
+			pattern.startswith('^https://') or pattern.startswith('^http://')
+			for pattern in url_patterns
+		)
+		
+		# If it has specific URLs or UI indicators, it's a web UI screen
+		return has_specific_url or (has_url and has_ui)
+
 	def _create_screen_from_context(
 		self,
 		screen_id: str,
@@ -314,6 +408,11 @@ class ScreenExtractor:
 		# Extract UI elements
 		ui_elements = self._extract_ui_elements(context)
 
+		# Determine content type (will be overridden in extract_screens if needed)
+		# Default to web_ui, will be classified properly during extraction
+		content_type = "web_ui"
+		is_actionable = True
+		
 		return ScreenDefinition(
 			screen_id=screen_id,
 			name=screen_name,
@@ -321,6 +420,8 @@ class ScreenExtractor:
 			url_patterns=url_patterns,
 			state_signature=state_signature,
 			ui_elements=ui_elements,
+			content_type=content_type,
+			is_actionable=is_actionable,
 			metadata={
 				'extraction_method': 'rule_based',
 				'extracted_from': 'documentation',
@@ -328,10 +429,15 @@ class ScreenExtractor:
 		)
 
 	def _extract_url_patterns(self, context: str) -> list[str]:
-		"""Extract URL patterns from context."""
+		"""
+		Extract URL patterns from context (Phase 4 improvements).
+		
+		Focuses on extracting specific, actionable URL patterns rather than
+		generic paths that match too broadly.
+		"""
 		patterns = []
 
-		# Look for URL mentions
+		# Look for full URL mentions (https:// or http://)
 		url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
 		matches = re.finditer(url_pattern, context)
 
@@ -343,44 +449,142 @@ class ScreenExtractor:
 			pattern = pattern.replace(r'\*', '.*')
 			pattern = f"^{pattern}$"
 			patterns.append(pattern)
+		
+		# Look for domain + path patterns (more specific)
+		domain_path_pattern = r'(?:https?://)?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(/[^\s<>"{}|\\^`\[\]]*)'
+		domain_matches = re.finditer(domain_path_pattern, context)
+		
+		for match in domain_matches:
+			domain = match.group(1)
+			path = match.group(2) if match.group(2) else '/'
+			
+			# Only add if path is specific (not just '/')
+			if path != '/' and len(path) > 2:
+				# Create pattern: ^https?://domain.com/path.*
+				escaped_path = re.escape(path)
+				# Allow trailing variations
+				pattern = f"^https?://{re.escape(domain)}{escaped_path}.*"
+				patterns.append(pattern)
 
-		# Look for relative paths
-		path_pattern = r'/[a-zA-Z0-9/_-]+'
+		# Look for specific relative paths (Phase 4: filter out generic ones)
+		# Only match paths that look like actual routes (not just '/div' or generic)
+		path_pattern = r'/(?:[a-zA-Z0-9_-]+/)+[a-zA-Z0-9_-]+'
 		path_matches = re.finditer(path_pattern, context)
 
 		for match in path_matches:
 			path = match.group(0)
-			patterns.append(f".*{re.escape(path)}.*")
+			# Filter out generic paths like '/div', '/span', etc.
+			generic_paths = ['/div', '/span', '/p', '/a', '/button', '/input', '/form']
+			if path.lower() not in generic_paths and len(path) > 3:
+				# Create pattern that matches this path
+				escaped_path = re.escape(path)
+				pattern = f".*{escaped_path}.*"
+				patterns.append(pattern)
 
-		# Deduplicate
-		return list(set(patterns))
+		# Deduplicate and filter
+		unique_patterns = list(set(patterns))
+		
+		# Phase 4: Filter out overly generic patterns
+		filtered_patterns = []
+		for pattern in unique_patterns:
+			# Skip patterns that are too generic (like '.*/.*')
+			if pattern == '.*/.*' or pattern == '.*':
+				continue
+			# Skip patterns that match any single character path
+			if pattern.startswith('.*/') and len(pattern) < 10:
+				continue
+			filtered_patterns.append(pattern)
+		
+		return filtered_patterns
 
 	def _extract_state_signature(self, context: str, screen_name: str) -> StateSignature:
 		"""
-		Extract state signature with **critical focus on negative indicators**.
+		Extract state signature with actual DOM indicators (Phase 4 improvements).
 		
-		This is Agent-Killer Edge Case #2: Extract distinguishing features.
+		Focuses on extracting actual UI elements (buttons, headings, links) rather than
+		instruction text. This ensures screens can be recognized by browser automation.
 		"""
 		signature = StateSignature()
 
-		# Extract required indicators
-		# Look for "must have" or "requires" patterns
+		# Phase 4: Extract actual UI elements, not instruction text
+		# Pattern: "button with text 'Submit'", "input field 'email'", "heading 'Dashboard'", etc.
+		ui_element_patterns = [
+			r'button.*?["\']([^"\']{1,50})["\']',  # Button text (max 50 chars)
+			r'input.*?["\']([^"\']{1,50})["\']',  # Input field label
+			r'link.*?["\']([^"\']{1,50})["\']',  # Link text
+			r'heading.*?["\']([^"\']{1,50})["\']',  # Heading text
+			r'title.*?["\']([^"\']{1,50})["\']',  # Page title
+			r'label.*?["\']([^"\']{1,50})["\']',  # Form label
+		]
+		
+		# Filter out instruction/documentation keywords
+		excluded_keywords = [
+			'instruction', 'protocol', 'guideline', 'conversational',
+			'phone call', 'voice assistant', 'empathetic listener',
+			'primary goal', 'secondary goal', 'core goal'
+		]
+		
+		for pattern in ui_element_patterns:
+			matches = re.finditer(pattern, context, re.IGNORECASE)
+			for match in matches:
+				element_text = match.group(1).strip()
+				
+				# Only add if it's a reasonable UI element (not instruction text)
+				if (len(element_text) > 0 and 
+				    len(element_text) <= 50 and 
+				    not any(keyword in element_text.lower() for keyword in excluded_keywords) and
+				    not element_text.startswith('1.') and  # Not a numbered list
+				    not element_text.startswith('Your')):  # Not instruction text
+					
+					# Determine selector based on element type
+					selector = 'body'
+					if 'button' in pattern.lower():
+						selector = 'button, .btn, [role="button"]'
+					elif 'heading' in pattern.lower() or 'title' in pattern.lower():
+						selector = 'h1, h2, h3, .page-title, .screen-title'
+					elif 'input' in pattern.lower() or 'label' in pattern.lower():
+						selector = 'input, label, [role="textbox"]'
+					elif 'link' in pattern.lower():
+						selector = 'a, [role="link"]'
+					
+					signature.required_indicators.append(Indicator(
+						type='dom_contains',
+						value=element_text,
+						selector=selector,
+						reason='UI element for screen recognition'
+					))
+		
+		# Extract URL patterns and add as indicators (Phase 4)
+		url_patterns = self._extract_url_patterns(context)
+		for pattern in url_patterns:
+			# Only add specific URL patterns, not generic ones
+			if pattern.startswith('^https://') or pattern.startswith('^http://'):
+				signature.required_indicators.append(Indicator(
+					type='url_matches',
+					pattern=pattern,
+					reason='URL pattern for screen recognition'
+				))
+		
+		# Extract required indicators from explicit patterns (keep for backward compatibility)
 		required_patterns = [
-			r'must (?:have|contain|show|display)\s+["\']?([^"\']+)["\']?',
-			r'requires\s+["\']?([^"\']+)["\']?',
-			r'should (?:have|contain)\s+["\']?([^"\']+)["\']?',
+			r'must (?:have|contain|show|display)\s+["\']?([^"\']{1,50})["\']?',
+			r'requires\s+["\']?([^"\']{1,50})["\']?',
 		]
 
 		for pattern in required_patterns:
 			matches = re.finditer(pattern, context, re.IGNORECASE)
 			for match in matches:
 				value = match.group(1).strip()
-				signature.required_indicators.append(Indicator(
-					type='dom_contains',
-					value=value,
-					selector='body',
-					reason='Required for screen identification'
-				))
+				# Only add if it's a reasonable UI element
+				if (len(value) > 0 and 
+				    len(value) <= 50 and 
+				    not any(keyword in value.lower() for keyword in excluded_keywords)):
+					signature.required_indicators.append(Indicator(
+						type='dom_contains',
+						value=value,
+						selector='body',
+						reason='Required for screen identification'
+					))
 
 		# Extract NEGATIVE indicators (CRITICAL for Agent-Killer edge case #2)
 		# Look for "not", "without", "if X is present then", "distinguishes", "indicates NOT", "visible"
@@ -494,12 +698,27 @@ class ScreenExtractor:
 		return elements
 
 	def _generate_screen_id(self, screen_name: str) -> str:
-		"""Generate screen ID from screen name."""
-		# Convert to lowercase, replace spaces with underscores, remove special chars
-		screen_id = screen_name.lower()
-		screen_id = re.sub(r'[^\w\s-]', '', screen_id)
-		screen_id = re.sub(r'[-\s]+', '_', screen_id)
-		return screen_id
+		"""
+		Generate short screen ID from screen name.
+		
+		Uses a hash-based approach to keep IDs short while maintaining uniqueness.
+		The full name is preserved in the `name` field for human readability.
+		"""
+		# Sanitize the name
+		sanitized = screen_name.lower()
+		sanitized = re.sub(r'[^\w\s-]', '', sanitized)
+		sanitized = re.sub(r'[-\s]+', '_', sanitized)
+		
+		# Truncate to first 100 chars to avoid extremely long inputs
+		sanitized = sanitized[:100]
+		
+		# Generate hash and take first 8 characters for short ID
+		hash_obj = hashlib.md5(sanitized.encode('utf-8'))
+		hash_suffix = hash_obj.hexdigest()[:8]
+		
+		# Use first 30 chars of sanitized name + hash for readability + uniqueness
+		prefix = sanitized[:30].rstrip('_')
+		return f"{prefix}_{hash_suffix}" if prefix else f"screen_{hash_suffix}"
 
 	def _generate_element_id(self, element_name: str, element_type: str) -> str:
 		"""Generate element ID from element name and type."""

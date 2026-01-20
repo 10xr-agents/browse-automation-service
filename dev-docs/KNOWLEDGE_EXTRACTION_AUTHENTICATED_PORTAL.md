@@ -136,18 +136,31 @@ Browser-Use is used for authenticated portals that require login credentials. It
 All extraction activities support explored authenticated portal content:
 
 - **Screen Extraction**: Identify application states from web page structure
+  - ✅ **New Format Support**: Screens are automatically classified as `content_type="web_ui"` and `is_actionable=True`
+  - ✅ **Content Classification**: Uses `_is_web_ui_screen()` to distinguish web UI from documentation
+  - ✅ **State Signatures**: Extracts actual DOM indicators (buttons, headings, inputs) for better recognition
+  - ✅ **URL Patterns**: Generates specific URL patterns (e.g., `^https://app\\.example\\.com/dashboard.*`)
 - **Task Extraction**: Parse workflows and procedures from portal pages
 - **Action Extraction**: Extract UI interactions from forms and interactive elements
+  - ✅ **Browser-Use Mapping**: Actions are automatically translated to browser-use compatible actions via `ActionTranslator`
+  - ✅ **Tool Mapping**: Action types (click, type, navigate, etc.) mapped to browser-use tools (click, input, navigate, etc.)
+  - ✅ **Parameter Conversion**: Parameters converted to browser-use format (e.g., `target_selector` → `index`/`selector`)
 - **Transition Extraction**: Identify navigation patterns from authenticated pages
 - **Business Function Extraction**: LLM analysis to identify business functions
 - **Operational Workflow Extraction**: LLM analysis to extract step-by-step workflows
+- **Action Gap Filling**: LLM-based extrapolation to infer missing actions and transitions
+  - ✅ **Gemini LLM**: Uses `gemini-2.0-flash-exp` to infer missing actions between known actions
+  - ✅ **Confidence Scoring**: Stores inferred actions with confidence scores (>0.6 threshold)
 
 **Supported Source Types**:
 - ✅ **Browser-Use**: Explored authenticated portal pages (`webpage` chunks)
+  - Content chunks have `chunk_type="webpage"` 
+  - Automatically processed through new knowledge restructuring pipeline
 
 **AI Providers**:
 - **OpenAI GPT-4o**: Primary choice for business function and workflow extraction
 - **Google Gemini 1.5 Pro**: Fallback option for business function and workflow extraction
+- **Google Gemini 2.0 Flash Exp**: Used for action gap extrapolation
 
 ### Feature Completeness
 
@@ -159,6 +172,14 @@ All extraction activities support explored authenticated portal content:
 - ✅ Business functions extracted from portal content
 - ✅ Operational workflows extracted from portal pages
 - ✅ Session maintained across page navigations
+
+**New Knowledge Restructuring Formats (Phase 1-6)**:
+- ✅ **Content Type Classification**: Screens automatically classified as `web_ui` vs `documentation`
+- ✅ **Actionable Screens**: Web UI screens marked as `is_actionable=True` for agent use
+- ✅ **Browser-Use Action Mapping**: All actions translated to browser-use compatible format
+- ✅ **Screen Recognition**: Improved recognition using actual DOM indicators and URL patterns
+- ✅ **Agent Communication**: Agent-friendly query API with browser-use actions
+- ✅ **Action Extrapolation**: LLM-based gap filling for missing actions and transitions
 
 ---
 
@@ -197,6 +218,20 @@ All extraction activities support explored authenticated portal content:
 - Extracts links with navigation targets
 - Extracts images with sources
 - Captures JavaScript-rendered content
+
+**Knowledge Restructuring Integration**:
+- Content chunks from authenticated portals have `chunk_type="webpage"`
+- Screens extracted from authenticated portals are automatically classified:
+  - `content_type="web_ui"` (authenticated portals are web UIs, not documentation)
+  - `is_actionable=True` (all authenticated portal screens are actionable)
+- Actions extracted from authenticated portals are automatically mapped to browser-use actions:
+  - Uses `ActionTranslator` to convert `ActionDefinition` → `BrowserUseAction`
+  - Parameters converted to browser-use format (e.g., `target_selector` → `index`)
+  - Ready for direct execution by browser-use agents
+- Screen recognition uses actual DOM indicators:
+  - UI element patterns (buttons, headings, inputs, links)
+  - Specific URL patterns (e.g., `^https://app\\.example\\.com/dashboard.*`)
+  - Excludes documentation phrases and generic patterns
 
 ---
 
@@ -384,8 +419,21 @@ Authenticated portal exploration provides:
 6. **Navigation Mapping**: Maps portal structure and page relationships
 7. **Business Knowledge**: LLM analysis for business functions and operational workflows
 8. **Multi-Source Integration**: Aggregation with other knowledge sources
+9. **New Knowledge Formats**: Full support for knowledge restructuring (Phases 1-6)
+   - Content type classification (web_ui vs documentation)
+   - Browser-use action mapping
+   - Improved screen recognition
+   - Agent-friendly query API
+   - LLM-based action extrapolation
 
 All explored content produces structured content chunks that flow through the unified knowledge extraction pipeline, ensuring consistent knowledge representation.
+
+**Knowledge Restructuring Benefits for Authenticated Portals**:
+- ✅ Screens automatically classified as `web_ui` and `is_actionable=True`
+- ✅ Actions automatically mapped to browser-use compatible format
+- ✅ Screen recognition uses actual DOM indicators for better accuracy
+- ✅ Agent queries return browser-use actions ready for execution
+- ✅ Missing actions inferred using LLM extrapolation
 
 **For public documentation sites without authentication**, see [Public Documentation Guide](./KNOWLEDGE_EXTRACTION_PUBLIC_DOCUMENTATION.md).
 

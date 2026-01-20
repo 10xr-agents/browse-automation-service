@@ -7,6 +7,7 @@ Extracts task definitions with critical focus on:
 - **Linear Step Validation**: Ensure steps are DAG (no backward references)
 """
 
+import hashlib
 import logging
 import re
 from typing import Any
@@ -618,8 +619,25 @@ class TaskExtractor:
 		return normalized
 
 	def _generate_task_id(self, task_name: str) -> str:
-		"""Generate task ID from task name."""
-		return self._normalize_variable_name(task_name)
+		"""
+		Generate short task ID from task name.
+		
+		Uses a hash-based approach to keep IDs short while maintaining uniqueness.
+		The full name is preserved in the `name` field for human readability.
+		"""
+		# Normalize the name
+		normalized = self._normalize_variable_name(task_name)
+		
+		# Truncate to first 50 chars to avoid extremely long inputs
+		normalized = normalized[:50]
+		
+		# Generate hash and take first 8 characters for short ID
+		hash_obj = hashlib.md5(normalized.encode('utf-8'))
+		hash_suffix = hash_obj.hexdigest()[:8]
+		
+		# Use first 30 chars of normalized name + hash for readability + uniqueness
+		prefix = normalized[:30].rstrip('_')
+		return f"{prefix}_{hash_suffix}" if prefix else f"task_{hash_suffix}"
 
 	def _deduplicate_tasks(self, tasks: list[TaskDefinition]) -> list[TaskDefinition]:
 		"""Deduplicate tasks by task_id."""

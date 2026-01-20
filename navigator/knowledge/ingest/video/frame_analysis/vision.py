@@ -23,6 +23,18 @@ from navigator.schemas import FrameAnalysisResponse
 
 logger = logging.getLogger(__name__)
 
+# Global client cache to reuse Gemini client across frame analyses (improves performance)
+_gemini_client_cache: dict[str, Any] = {}
+
+
+def _get_gemini_client(google_key: str):
+	"""Get or create cached Gemini client for API key (reuse client for better performance)."""
+	global _gemini_client_cache
+	if google_key not in _gemini_client_cache:
+		from google import genai
+		_gemini_client_cache[google_key] = genai.Client(api_key=google_key)
+	return _gemini_client_cache[google_key]
+
 
 def _is_503_unavailable_error(exception: Exception) -> bool:
 	"""Check if exception is a 503 UNAVAILABLE error from Gemini API."""
@@ -43,17 +55,18 @@ def _is_503_unavailable_error(exception: Exception) -> bool:
 	retry=retry_if_exception(_is_503_unavailable_error),
 	reraise=True  # Reraise so outer function can catch and log properly
 )
+
+
 async def _analyze_frame_with_retry(
 	frame_path: Path,
 	timestamp: float,
 	google_key: str
 ) -> dict[str, Any] | None:
 	"""Internal function with retry logic for 503 errors."""
-	from google import genai
 	from PIL import Image
 
-	# Create client with API key
-	client = genai.Client(api_key=google_key)
+	# Reuse cached client instead of creating new one per frame (better performance)
+	client = _get_gemini_client(google_key)
 
 	prompt = """Analyze this video frame COMPREHENSIVELY and identify ALL features:
 
@@ -200,10 +213,10 @@ async def analyze_frame_with_vision(
 	- Return None if all retries are exhausted
 	"""
 	try:
-		# Check both GOOGLE_API_KEY and GEMINI_API_KEY
-		google_key = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY')
+		# Use GOOGLE_API_KEY (standardized - GEMINI_API_KEY is deprecated)
+		google_key = os.getenv('GOOGLE_API_KEY')
 		if not google_key:
-			logger.warning(f"No Gemini API key available (GOOGLE_API_KEY or GEMINI_API_KEY) for frame {timestamp}s")
+			logger.warning(f"No Gemini API key available (GOOGLE_API_KEY) for frame {timestamp}s")
 			return None
 
 		try:

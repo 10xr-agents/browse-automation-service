@@ -229,12 +229,25 @@ class KnowledgeAPI:
 
 			elif query_type == 'sitemap_functional':
 				return await self.get_functional_sitemap()
+			
+			# Phase 3: Agent communication query types
+			elif query_type == 'agent_query':
+				# Agent-friendly query that returns browser-use actions
+				# Note: This is a simplified version. For full functionality, use the REST endpoint
+				# POST /knowledge/{knowledge_id}/query or MCP tool query_knowledge_for_agent
+				return {
+					'success': False,
+					'error': 'Use REST endpoint POST /knowledge/{knowledge_id}/query or MCP tool query_knowledge_for_agent for agent queries'
+				}
 
 			else:
 				return {
 					'success': False,
 					'error': f"Unknown query type: {query_type}",
-					'available_types': ['page', 'search', 'links', 'sitemap_semantic', 'sitemap_functional'],
+					'available_types': [
+						'page', 'search', 'links', 'sitemap_semantic', 'sitemap_functional',
+						'agent_query'  # Phase 3
+					],
 				}
 		except Exception as e:
 			logger.error(f"Failed to execute query {query_type}: {e}")

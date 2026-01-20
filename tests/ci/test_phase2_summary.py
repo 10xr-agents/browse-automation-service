@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 
@@ -46,7 +46,7 @@ def run_manual_test():
 	"""Run manual test script."""
 	print("\nRunning manual test script...")
 	result = subprocess.run(
-		["uv", "run", "python", "scripts/test_phase2_manual.py"],
+		["uv", "run", "python", "tests/ci/test_phase2_manual.py"],
 		capture_output=True,
 		text=True,
 	)

@@ -8,6 +8,7 @@ Extracts state transition definitions with:
 - Cost and reliability metrics
 """
 
+import hashlib
 import logging
 import re
 from typing import Any
@@ -231,7 +232,16 @@ class TransitionExtractor:
 		context: str
 	) -> TransitionDefinition:
 		"""Create transition definition from extracted context."""
-		transition_id = f"{from_screen_id}_to_{to_screen_id}"
+		# Generate short transition ID using hash
+		# Since screen IDs are now shorter, we can use them directly, but add hash for uniqueness
+		transition_key = f"{from_screen_id}_to_{to_screen_id}"
+		hash_obj = hashlib.md5(transition_key.encode('utf-8'))
+		hash_suffix = hash_obj.hexdigest()[:8]
+		
+		# Truncate screen IDs to first 20 chars each to keep transition ID reasonable
+		from_prefix = from_screen_id[:20].rstrip('_')
+		to_prefix = to_screen_id[:20].rstrip('_')
+		transition_id = f"{from_prefix}_to_{to_prefix}_{hash_suffix}"
 
 		# Extract trigger
 		trigger = self._extract_trigger(context)

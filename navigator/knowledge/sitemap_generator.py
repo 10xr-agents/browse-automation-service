@@ -57,8 +57,36 @@ class SiteMapGenerator:
 				pages = list(self.storage.pages.values())
 			else:
 				# Query all pages from MongoDB
-				# For now, return empty structure
-				pages = []
+				try:
+					from navigator.knowledge.persist.documents.screens import query_screens_by_knowledge_id
+					from navigator.knowledge.persist.collections import get_screens_collection
+					
+					# Get all screens from MongoDB (screens represent pages)
+					collection = await get_screens_collection()
+					if collection:
+						cursor = collection.find({})
+						screen_docs = await cursor.to_list(length=None)
+						
+						# Convert screens to page format
+						pages = []
+						for screen_doc in screen_docs:
+							pages.append({
+								'url': screen_doc.get('url', ''),
+								'title': screen_doc.get('name', screen_doc.get('screen_id', '')),
+								'description': screen_doc.get('description', ''),
+								'topics': {
+									'categories': screen_doc.get('categories', []),
+									'main_topics': screen_doc.get('topics', []),
+									'keywords': screen_doc.get('keywords', []),
+								}
+							})
+						logger.info(f"✅ Loaded {len(pages)} pages from MongoDB for sitemap generation")
+					else:
+						logger.warning("⚠️ MongoDB screens collection unavailable, using empty structure")
+						pages = []
+				except Exception as e:
+					logger.warning(f"⚠️ Failed to load pages from MongoDB: {e}, using empty structure")
+					pages = []
 
 			# Group by topics/categories
 			topics: dict[str, list[dict[str, Any]]] = {}

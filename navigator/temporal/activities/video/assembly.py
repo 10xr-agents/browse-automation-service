@@ -75,13 +75,24 @@ async def assemble_video_ingestion_activity(
 			metadata_dict = extract_metadata(video_path)
 
 		# Create SourceMetadata
+		# Safely get file stats (handle missing file or permission errors)
+		size_bytes = 0
+		last_modified = None
+		if video_path.exists():
+			try:
+				stat_result = video_path.stat()
+				size_bytes = stat_result.st_size
+				last_modified = datetime.fromtimestamp(stat_result.st_mtime)
+			except (OSError, PermissionError) as e:
+				logger.warning(f"⚠️ Failed to get file stats for {video_path}: {e}")
+		
 		source_metadata = SourceMetadata(
 			source_type=SourceType.VIDEO_WALKTHROUGH,
 			url=str(video_path),
 			title=video_path.stem,
 			format=detect_video_format(str(video_path)),
-			size_bytes=video_path.stat().st_size if video_path.exists() else 0,
-			last_modified=datetime.fromtimestamp(video_path.stat().st_mtime) if video_path.exists() else None,
+			size_bytes=size_bytes,
+			last_modified=last_modified,
 		)
 
 		# Create IngestionResult
@@ -136,6 +147,11 @@ async def assemble_video_ingestion_activity(
 		frame_storage = get_frame_storage()
 
 		for s3_key in input.analysis_result_s3_keys:
+			# Skip empty S3 keys (failed batches)
+			if not s3_key or not s3_key.strip():
+				logger.debug(f"⚠️ Skipping empty S3 key (failed batch)")
+				continue
+			
 			try:
 				# Download batch result JSON from S3
 				if s3_key.startswith('s3://'):
@@ -193,11 +209,27 @@ async def assemble_video_ingestion_activity(
 			activity.heartbeat({"status": "extracting_actions"})
 			action_sequences = extract_action_sequence(all_frame_analyses)
 			if action_sequences:
+				# Format action sequences as a readable string
+				action_lines = []
+				for idx, action in enumerate(action_sequences, 1):
+					timestamp = action.get('timestamp', 0)
+					action_type = action.get('action_type', 'unknown')
+					target = action.get('target', 'unknown')
+					context = action.get('context', '')
+					screen = action.get('screen', 'Unknown')
+					action_lines.append(
+						f"{idx}. [{timestamp:.2f}s] {action_type}: {target} on {screen}"
+					)
+					if context:
+						action_lines.append(f"   Context: {context}")
+				
+				action_text = "# Action Sequences\n\n" + "\n".join(action_lines)
+				
 				action_chunk = ContentChunk(
 					chunk_id=f"{input.ingestion_id}_actions",
-					content=f"# Action Sequences\n\n{action_sequences}",
+					content=action_text,
 					chunk_index=len(result.content_chunks),
-					token_count=int(len(action_sequences.split()) * 1.3),
+					token_count=int(len(action_text.split()) * 1.3),
 					chunk_type="video_actions",
 					section_title="Extracted Actions",
 				)

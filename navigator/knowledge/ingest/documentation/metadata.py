@@ -199,7 +199,7 @@ async def caption_image_with_vision(
 				logger.warning(f"OpenAI Vision captioning failed: {e}")
 
 		# Fallback to Gemini Vision (using new google.genai SDK)
-		google_key = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY')
+		google_key = os.getenv('GOOGLE_API_KEY')
 		if google_key:
 			try:
 				from io import BytesIO

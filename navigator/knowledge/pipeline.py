@@ -333,3 +333,168 @@ class KnowledgePipeline:
 		except Exception as e:
 			logger.error(f"Failed to search similar: {e}")
 			return []
+	
+	async def fill_action_gaps(
+		self,
+		knowledge_id: str,
+		website_id: str
+	) -> dict[str, Any]:
+		"""
+		Identify and fill gaps in action sequences using LLM extrapolation (Phase 5).
+		
+		This method:
+		1. Analyzes all known actions and transitions
+		2. Identifies gaps (actions that should be connected but aren't)
+		3. Uses Gemini LLM to infer missing actions
+		4. Validates and stores inferred actions
+		
+		Args:
+			knowledge_id: Knowledge ID to analyze
+			website_id: Website ID for context
+		
+		Returns:
+			ExtrapolationResult dictionary
+		"""
+		try:
+			from navigator.knowledge.extrapolation import (
+				ActionExtrapolationService,
+				ActionGap,
+				ExtrapolationRequest,
+			)
+			from navigator.knowledge.persist.documents.actions import (
+				query_actions_by_knowledge_id,
+			)
+			from navigator.knowledge.persist.documents import (
+				query_transitions_by_knowledge_id,
+			)
+			
+			# Get all actions and transitions for this knowledge
+			actions = await query_actions_by_knowledge_id(knowledge_id, limit=1000)
+			transitions = await query_transitions_by_knowledge_id(knowledge_id, limit=1000)
+			
+			# Identify gaps
+			gaps = self._identify_action_gaps(actions, transitions)
+			
+			if not gaps:
+				logger.info("No action gaps found")
+				return {
+					"gaps_filled": 0,
+					"inferred_actions": [],
+					"inferred_transitions": [],
+					"confidence_scores": {},
+					"errors": []
+				}
+			
+			logger.info(f"Found {len(gaps)} action gaps, extrapolating with LLM...")
+			
+			# Create extrapolation service
+			extrapolation_service = ActionExtrapolationService()
+			
+			# Extrapolate
+			request = ExtrapolationRequest(
+				gaps=gaps,
+				knowledge_id=knowledge_id,
+				website_id=website_id,
+				include_screens=True,
+				max_intermediate_steps=5
+			)
+			
+			result = await extrapolation_service.extrapolate_actions(request)
+			
+			# Store inferred actions (with lower confidence flag)
+			from navigator.knowledge.persist.documents.actions import save_action
+			from navigator.knowledge.extract.actions import ActionDefinition
+			
+			stored_count = 0
+			for inferred_action in result.inferred_actions:
+				if inferred_action.confidence > 0.6:  # Only store high-confidence inferences
+					try:
+						# Create ActionDefinition from inferred action
+						action_def = ActionDefinition(
+							action_id=f"inferred_{inferred_action.action_type}_{hash(inferred_action.target) % 10000}",
+							name=inferred_action.description,
+							website_id=website_id,
+							action_type=inferred_action.action_type,
+							target_selector=inferred_action.target,
+							parameters={},
+							metadata={
+								'inferred': True,
+								'confidence': inferred_action.confidence,
+								'reasoning': inferred_action.reasoning
+							}
+						)
+						
+						await save_action(action_def, knowledge_id=knowledge_id)
+						stored_count += 1
+					except Exception as e:
+						logger.warning(f"Failed to store inferred action: {e}")
+			
+			logger.info(
+				f"✅ Filled {result.gaps_filled} action gaps with {len(result.inferred_actions)} inferred actions "
+				f"({stored_count} stored)"
+			)
+			
+			return result.dict()
+		
+		except Exception as e:
+			logger.error(f"Failed to fill action gaps: {e}", exc_info=True)
+			return {
+				"gaps_filled": 0,
+				"inferred_actions": [],
+				"inferred_transitions": [],
+				"confidence_scores": {},
+				"errors": [str(e)]
+			}
+	
+	def _identify_action_gaps(
+		self,
+		actions: list[Any],  # list[ActionDefinition]
+		transitions: list[Any]  # list[TransitionDefinition]
+	) -> list[ActionGap]:
+		"""
+		Identify gaps in action sequences.
+		
+		Args:
+			actions: List of known actions
+			transitions: List of known transitions
+		
+		Returns:
+			List of ActionGap objects representing missing connections
+		"""
+		from navigator.knowledge.extrapolation import ActionGap
+		
+		gaps = []
+		
+		# Build action graph
+		action_to_screen: dict[str, str] = {}
+		screen_to_actions: dict[str, list[str]] = {}
+		
+		for action in actions:
+			for screen_id in (action.screen_ids or []):
+				action_to_screen[action.action_id] = screen_id
+				if screen_id not in screen_to_actions:
+					screen_to_actions[screen_id] = []
+				screen_to_actions[screen_id].append(action.action_id)
+		
+		# Find transitions that don't have clear action paths
+		for transition in transitions:
+			from_screen_id = getattr(transition, 'from_screen_id', None)
+			to_screen_id = getattr(transition, 'to_screen_id', None)
+			action_id = getattr(transition, 'action_id', None)
+			
+			# If transition has no action, it's a gap
+			if not action_id:
+				# Find actions on from_screen and to_screen
+				from_actions = screen_to_actions.get(from_screen_id or '', [])
+				to_actions = screen_to_actions.get(to_screen_id or '', [])
+				
+				if from_actions and to_actions:
+					# Create gap between last action on from_screen and first action on to_screen
+					gaps.append(ActionGap(
+						from_action_id=from_actions[-1],
+						to_action_id=to_actions[0],
+						from_screen_id=from_screen_id,
+						to_screen_id=to_screen_id
+					))
+		
+		return gaps

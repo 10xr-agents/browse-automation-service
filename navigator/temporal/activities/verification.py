@@ -126,17 +126,45 @@ async def enrich_knowledge_activity(input: EnrichKnowledgeInput) -> EnrichKnowle
 	activity.heartbeat({"status": "enriching", "job_id": input.job_id})
 
 	try:
-		# For now, enrichment is a placeholder
-		# In the future, this would:
-		# 1. Load discrepancies
-		# 2. Update screens/tasks/actions with corrections
-		# 3. Persist enriched entities
+		logger.info(
+			f"🔍 Enriching knowledge: job_id={input.job_id}, "
+			f"discrepancies={len(input.discrepancy_ids)}"
+		)
+
+		enrichments_applied = 0
+		updated_screen_ids: list[str] = []
+		updated_task_ids: list[str] = []
+
+		# Process discrepancies if any are provided
+		if input.discrepancy_ids:
+			logger.info(f"📋 Processing {len(input.discrepancy_ids)} discrepancy(ies) for enrichment")
+			
+			# NOTE: Current verification implementation checks screen/task existence but doesn't
+			# create discrepancy objects yet. When discrepancy storage is implemented in the future:
+			# 1. Load discrepancies from MongoDB using discrepancy_ids
+			# 2. Apply enrichments based on discrepancy type (selector_fallback, timing_adjustment, etc.)
+			# 3. Update screens/tasks/actions with corrections
+			# 4. Persist enriched entities back to MongoDB
+			# 5. Mark discrepancies as resolved
+			
+			# Current implementation correctly handles empty discrepancy_ids (no discrepancies = no enrichments needed)
+			logger.info(
+				"ℹ️  Discrepancy storage not yet implemented. "
+				"Enrichment logic will be enhanced when discrepancies are persisted to MongoDB."
+			)
+		else:
+			logger.info("✅ No discrepancies to process - knowledge is consistent")
 
 		result = EnrichKnowledgeResult(
-			enrichments_applied=0,
-			updated_screen_ids=[],
-			updated_task_ids=[],
+			enrichments_applied=enrichments_applied,
+			updated_screen_ids=updated_screen_ids,
+			updated_task_ids=updated_task_ids,
 			success=True,
+		)
+		
+		logger.info(
+			f"✅ Enrichment completed: {enrichments_applied} enrichments applied, "
+			f"{len(updated_screen_ids)} screens updated, {len(updated_task_ids)} tasks updated"
 		)
 
 		# Record execution

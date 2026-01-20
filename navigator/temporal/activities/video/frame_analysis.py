@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 from temporalio import activity
 
@@ -51,11 +52,18 @@ async def analyze_frames_batch_activity(input: AnalyzeFramesBatchInput) -> Analy
 	})
 
 	frame_storage = get_frame_storage()
+	total_frames = len(input.frame_batch)
+	
+	logger.info(f"📊 Processing batch {input.batch_index}: {total_frames} frames total")
 
 	# Process all frames in parallel using asyncio.gather
-	async def analyze_frame(timestamp: float, frame_path_string: str) -> dict[str, Any] | None:
+	async def analyze_frame(timestamp: float, frame_path_string: str, frame_index: int) -> dict[str, Any] | None:
 		"""Analyze a single frame (download from S3 if needed)."""
 		try:
+			# Log progress every 5 frames or at start/end
+			if frame_index == 0 or frame_index == total_frames - 1 or (frame_index + 1) % 5 == 0:
+				logger.info(f"🔄 Processing frame {frame_index + 1}/{total_frames} (timestamp: {timestamp:.2f}s)")
+			
 			# Download frame bytes (from local filesystem or S3)
 			if frame_path_string.startswith('s3://'):
 				# Download from S3
@@ -91,10 +99,10 @@ async def analyze_frames_batch_activity(input: AnalyzeFramesBatchInput) -> Analy
 			logger.warning(f"Frame analysis failed for {timestamp}s: {e}")
 			return None
 
-	# Create tasks for all frames in the batch
+	# Create tasks for all frames in the batch with progress tracking
 	tasks = [
-		analyze_frame(timestamp, frame_path)
-		for timestamp, frame_path in input.frame_batch
+		analyze_frame(timestamp, frame_path, idx)
+		for idx, (timestamp, frame_path) in enumerate(input.frame_batch)
 	]
 
 	# Heartbeat before starting parallel processing
@@ -102,11 +110,15 @@ async def analyze_frames_batch_activity(input: AnalyzeFramesBatchInput) -> Analy
 		"status": "analyzing_frames",
 		"batch_index": input.batch_index,
 		"frames_count": len(tasks),
-		"progress": "starting_parallel_analysis"
+		"progress": f"starting_parallel_analysis_0/{total_frames}"
 	})
+
+	logger.info(f"🚀 Starting parallel analysis of {total_frames} frames in batch {input.batch_index}")
 
 	# Process all frames in parallel
 	frame_analyses_list = await asyncio.gather(*tasks, return_exceptions=True)
+	
+	logger.info(f"✅ Completed parallel analysis: {len([a for a in frame_analyses_list if not isinstance(a, Exception) and a is not None])}/{total_frames} frames analyzed successfully")
 
 	# Heartbeat after parallel processing completes
 	activity.heartbeat({
@@ -147,15 +159,19 @@ async def analyze_frames_batch_activity(input: AnalyzeFramesBatchInput) -> Analy
 		)
 		logger.error(error_msg)
 		return AnalyzeFramesBatchResult(
-			batch_index=input.batch_index,
-			frames_analyzed=0,
-			analysis_result_s3_key=None,
+			s3_key="",  # Empty string for failed batch (schema requires str, not None)
+			frame_count=0,
 			success=False,
 			errors=[error_msg],
 		)
 
 	# Upload to S3
-	s3_key = f"knowledge-extraction-wf-dev/{input.ingestion_id}/frame_analysis_batch_{input.batch_index}.json"
+	# Use output_s3_prefix if provided, otherwise construct from ingestion_id
+	if input.output_s3_prefix:
+		s3_key = f"{input.output_s3_prefix}/batch_{input.batch_index}.json"
+	else:
+		s3_key = f"results/{input.ingestion_id}/batch_{input.batch_index}.json"
+	
 	s3_client = frame_storage._get_s3_client()
 
 	loop = asyncio.get_event_loop()
@@ -173,8 +189,7 @@ async def analyze_frames_batch_activity(input: AnalyzeFramesBatchInput) -> Analy
 	logger.info(f"📤 Uploaded batch {input.batch_index} results to S3: {s3_url}")
 
 	return AnalyzeFramesBatchResult(
-		batch_index=input.batch_index,
-		frames_analyzed=len(frame_analyses),
-		analysis_result_s3_key=s3_url,
+		s3_key=s3_url,
+		frame_count=len(frame_analyses),
 		success=True,
 	)

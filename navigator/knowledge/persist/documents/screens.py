@@ -121,13 +121,20 @@ async def get_screen(screen_id: str) -> ScreenDefinition | None:
 		return None
 
 
-async def query_screens_by_website(website_id: str, limit: int = 100) -> list[ScreenDefinition]:
+async def query_screens_by_website(
+	website_id: str,
+	limit: int = 100,
+	content_type: str | None = None,
+	actionable_only: bool = False
+) -> list[ScreenDefinition]:
 	"""
 	Query screens by website_id.
 	
 	Args:
 		website_id: Website ID to query
 		limit: Maximum number of results
+		content_type: Optional content type filter ('web_ui', 'documentation', etc.)
+		actionable_only: If True, only return screens with is_actionable=True
 	
 	Returns:
 		List of ScreenDefinition objects
@@ -138,7 +145,18 @@ async def query_screens_by_website(website_id: str, limit: int = 100) -> list[Sc
 			logger.warning("MongoDB unavailable, cannot query screens")
 			return []
 
-		cursor = collection.find({'website_id': website_id}).limit(limit)
+		# Build query
+		query: dict[str, Any] = {'website_id': website_id}
+		
+		# Add content type filter (Phase 1)
+		if content_type:
+			query['content_type'] = content_type
+		
+		# Add actionable filter (Phase 1)
+		if actionable_only:
+			query['is_actionable'] = True
+
+		cursor = collection.find(query).limit(limit)
 		screens = []
 
 		async for doc in cursor:
@@ -159,7 +177,9 @@ async def query_screens_by_website(website_id: str, limit: int = 100) -> list[Sc
 async def query_screens_by_knowledge_id(
 	knowledge_id: str,
 	job_id: str | None = None,
-	limit: int = 100
+	limit: int = 100,
+	content_type: str | None = None,
+	actionable_only: bool = False
 ) -> list[ScreenDefinition]:
 	"""
 	Query screens by knowledge_id, optionally filtered by job_id.
@@ -171,6 +191,8 @@ async def query_screens_by_knowledge_id(
 		knowledge_id: Knowledge ID to query
 		job_id: Optional job ID to filter by (if None, gets latest)
 		limit: Maximum number of results
+		content_type: Optional content type filter ('web_ui', 'documentation', etc.)
+		actionable_only: If True, only return screens with is_actionable=True
 	
 	Returns:
 		List of ScreenDefinition objects
@@ -183,6 +205,14 @@ async def query_screens_by_knowledge_id(
 
 		# Build query
 		query: dict[str, Any] = {'knowledge_id': knowledge_id}
+		
+		# Add content type filter (Phase 1)
+		if content_type:
+			query['content_type'] = content_type
+		
+		# Add actionable filter (Phase 1)
+		if actionable_only:
+			query['is_actionable'] = True
 
 		# Track which job_id we're querying (for return value)
 		actual_job_id = job_id

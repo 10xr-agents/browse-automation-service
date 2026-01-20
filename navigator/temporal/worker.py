@@ -24,6 +24,7 @@ from navigator.temporal.activities import (
 	extract_screens_activity,
 	extract_tasks_activity,
 	extract_transitions_activity,
+	extract_user_flows_activity,
 	extract_workflows_activity,
 	ingest_source_activity,
 	init_activity_dependencies,
@@ -158,6 +159,7 @@ class TemporalWorkerService:
 				extract_transitions_activity,  # Extract transition definitions
 				extract_business_functions_activity,  # Extract business functions (LLM-based)
 				extract_workflows_activity,  # Extract operational workflows (LLM-based)
+				extract_user_flows_activity,  # Extract user flows (Phase 4: synthesis from all entities)
 
 				# ========================================================================
 				# Phase 4: Graph Construction Activities
