@@ -11,12 +11,12 @@ from typing import Any
 from navigator.action.command import (
 	ActionCommand,
 	ActionResult,
+	ActionType,
 	ClickActionCommand,
 	NavigateActionCommand,
 	ScrollActionCommand,
 	TypeActionCommand,
 	WaitActionCommand,
-	ActionType,
 )
 from navigator.action.dispatcher import ActionDispatcher
 
@@ -29,7 +29,7 @@ class PresentationActionRegistry:
 	
 	Wrapper around ActionDispatcher that provides presentation-specific action execution.
 	"""
-	
+
 	def __init__(self, action_dispatcher: ActionDispatcher):
 		"""
 		Initialize the presentation action registry.
@@ -39,7 +39,7 @@ class PresentationActionRegistry:
 		"""
 		self.action_dispatcher = action_dispatcher
 		logger.debug("PresentationActionRegistry initialized")
-	
+
 	async def execute_action(self, action_type: str, params: dict[str, Any]) -> ActionResult:
 		"""
 		Execute an action.
@@ -58,13 +58,13 @@ class PresentationActionRegistry:
 				success=False,
 				error=f"Unknown action type: {action_type}",
 			)
-		
+
 		# Execute action via dispatcher
 		logger.debug(f"Executing action: {action_type} with params: {params}")
 		result = await self.action_dispatcher.execute_action(action)
 		logger.debug(f"Action result: success={result.success}, error={result.error}")
 		return result
-	
+
 	def _create_action_command(self, action_type: str, params: dict[str, Any]) -> ActionCommand | None:
 		"""
 		Create an ActionCommand from action type and params.
@@ -96,36 +96,36 @@ class PresentationActionRegistry:
 		elif action_type == "reload":
 			# Reload is typically the same as refresh
 			return ActionCommand(action_type=ActionType.REFRESH, params=params)
-		
+
 		# Step 1.7: Interaction Actions
 		elif action_type in ("right_click", "double_click", "hover", "drag_drop"):
 			return ActionCommand(action_type=ActionType.CLICK, params=params)  # Use CLICK as base type
-		
+
 		# Step 1.8: Text Input Actions
 		elif action_type in ("type_slowly", "clear", "select_all", "copy", "paste", "cut"):
 			if action_type == "type_slowly" or action_type == "clear":
 				return TypeActionCommand(params=params)
 			else:
 				return ActionCommand(action_type=ActionType.SEND_KEYS, params=params)
-		
+
 		# Step 1.9: Form Actions
 		elif action_type in ("fill_form", "select_dropdown", "select_multiple", "upload_file", "submit_form", "reset_form"):
 			return ActionCommand(action_type=ActionType.CLICK, params=params)  # Use CLICK as base type, handlers will distinguish
-		
+
 		# Step 1.10: Media Actions (require JavaScript)
 		elif action_type in ("play_video", "pause_video", "seek_video", "adjust_volume", "toggle_fullscreen", "toggle_mute"):
 			return ActionCommand(action_type=ActionType.SEND_KEYS, params=params)  # Use SEND_KEYS as base type
-		
+
 		# Step 1.11: Advanced Actions
 		elif action_type in ("keyboard_shortcut", "multi_select", "highlight_element", "zoom_in", "zoom_out", "zoom_reset", "take_screenshot", "download_file"):
 			if action_type == "keyboard_shortcut":
 				return ActionCommand(action_type=ActionType.SEND_KEYS, params=params)
 			else:
 				return ActionCommand(action_type=ActionType.CLICK, params=params)  # Use CLICK as base type
-		
+
 		# Step 1.12: Presentation-Specific Actions (require JavaScript)
 		elif action_type in ("presentation_mode", "show_pointer", "animate_scroll", "highlight_region", "draw_on_page", "focus_element"):
 			return ActionCommand(action_type=ActionType.SEND_KEYS, params=params)  # Use SEND_KEYS as base type
-		
+
 		else:
 			return None

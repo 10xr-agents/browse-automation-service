@@ -5,15 +5,15 @@ Integrates exploration, analysis, and storage into a complete pipeline.
 """
 
 import logging
-import re
 import time
 from typing import Any
-from urllib.parse import urlparse
 
 from uuid_extensions import uuid7str
 
 from browser_use import BrowserSession
 from navigator.knowledge.exploration_engine import ExplorationEngine, ExplorationStrategy
+from navigator.knowledge.pipeline_exploration import process_exploration_loop
+from navigator.knowledge.pipeline_helpers import categorize_error
 from navigator.knowledge.progress_observer import (
 	ExplorationProgress,
 	LoggingProgressObserver,
@@ -36,7 +36,7 @@ class KnowledgePipeline:
 	- Batch processing of pages
 	- Error handling and recovery
 	"""
-	
+
 	def __init__(
 		self,
 		browser_session: BrowserSession,
@@ -64,9 +64,8 @@ class KnowledgePipeline:
 		self.browser_session = browser_session
 		self.storage = storage or KnowledgeStorage(use_mongodb=True)
 		self.vector_store = vector_store or VectorStore(use_mongodb=True)
-		
+
 		# Initialize base_url from start_url when explore_and_store is called
-		# For now, set it to None - it will be set when exploration starts
 		self.exploration_engine = ExplorationEngine(
 			browser_session=browser_session,
 			max_depth=max_depth,
@@ -74,31 +73,30 @@ class KnowledgePipeline:
 			base_url=None,  # Will be set from start_url in explore_and_store
 		)
 		self.semantic_analyzer = SemanticAnalyzer(browser_session=browser_session)
-		
+
 		# Progress observer for real-time updates
-		# Default to logging observer if none provided
 		if progress_observer is None:
 			self.progress_observer = LoggingProgressObserver()
 		else:
 			self.progress_observer = progress_observer
-		
+
 		# Path restrictions
 		self.include_paths = include_paths or []
 		self.exclude_paths = exclude_paths or []
-		
+
 		# Job state tracking
 		self.current_job_id: str | None = None
 		self.job_status: str = "idle"  # 'idle', 'running', 'paused', 'completed', 'failed', 'cancelled'
 		self.job_paused: bool = False
-		
+
 		# Enhanced progress tracking
 		self.job_start_time: float | None = None
-		self.page_processing_times: list[float] = []  # Track processing times for rate calculation
-		self.recent_completed_pages: list[dict[str, Any]] = []  # Recent pages with titles
-		self.max_recent_pages: int = 10  # Keep last 10 completed pages
-		
+		self.page_processing_times: list[float] = []
+		self.recent_completed_pages: list[dict[str, Any]] = []
+		self.max_recent_pages: int = 10
+
 		logger.debug("KnowledgePipeline initialized")
-	
+
 	async def process_url(self, url: str) -> dict[str, Any]:
 		"""
 		Process a single URL: extract content, analyze, and store.
@@ -114,22 +112,22 @@ class KnowledgePipeline:
 			# Extract content
 			content = await self.semantic_analyzer.extract_content(url)
 			logger.debug(f"      📊 Content extracted: {len(content.get('paragraphs', []))} paragraphs, {len(content.get('headings', []))} headings")
-			
+
 			# Extract entities
-			logger.debug(f"      🏷️  Identifying entities...")
+			logger.debug("      🏷️  Identifying entities...")
 			entities = self.semantic_analyzer.identify_entities(content.get('text', ''))
 			logger.debug(f"      ✅ Found {len(entities)} entities")
-			
+
 			# Extract topics
-			logger.debug(f"      📑 Extracting topics...")
+			logger.debug("      📑 Extracting topics...")
 			topics = self.semantic_analyzer.extract_topics(content)
 			logger.debug(f"      ✅ Found {len(topics)} topics")
-			
+
 			# Generate embedding
-			logger.debug(f"      🔢 Generating embedding...")
+			logger.debug("      🔢 Generating embedding...")
 			embedding = self.semantic_analyzer.generate_embedding(content.get('text', ''))
 			logger.debug(f"      ✅ Embedding generated (size: {len(embedding)})")
-			
+
 			# Store page
 			logger.debug(f"      💾 Storing page: {url}")
 			page_data = {
@@ -138,17 +136,17 @@ class KnowledgePipeline:
 				'topics': topics,
 			}
 			await self.storage.store_page(url, page_data)
-			logger.debug(f"      ✅ Page stored successfully")
-			
+			logger.debug("      ✅ Page stored successfully")
+
 			# Store embedding
-			logger.debug(f"      💾 Storing embedding...")
+			logger.debug("      💾 Storing embedding...")
 			await self.vector_store.store_embedding(
 				id=url,
 				embedding=embedding,
 				metadata={'url': url, 'title': content.get('title', '')},
 			)
-			logger.debug(f"      ✅ Embedding stored")
-			
+			logger.debug("      ✅ Embedding stored")
+
 			return {
 				'url': url,
 				'success': True,
@@ -158,7 +156,7 @@ class KnowledgePipeline:
 			}
 		except Exception as e:
 			# Categorize error
-			error_type = self._categorize_error(str(e), url)
+			error_type = categorize_error(str(e), url)
 			logger.debug(f"      ❌ Processing failed ({error_type}): {str(e)}")
 			return {
 				'url': url,
@@ -166,89 +164,7 @@ class KnowledgePipeline:
 				'error': str(e),
 				'error_type': error_type,
 			}
-	
-	def _categorize_error(self, error_msg: str, url: str) -> str:
-		"""
-		Categorize error type for better error handling.
-		
-		Args:
-			error_msg: Error message
-			url: URL that failed
-		
-		Returns:
-			Error category: 'network', 'timeout', 'http_4xx', 'http_5xx', 'parsing', 'other'
-		"""
-		error_lower = error_msg.lower()
-		
-		# Network errors
-		if any(keyword in error_lower for keyword in ['connection', 'network', 'dns', 'resolve', 'refused']):
-			return 'network'
-		
-		# Timeout errors
-		if any(keyword in error_lower for keyword in ['timeout', 'timed out', 'exceeded']):
-			return 'timeout'
-		
-		# HTTP 4xx errors
-		if any(keyword in error_lower for keyword in ['404', '403', '401', '400', 'not found', 'forbidden', 'unauthorized']):
-			return 'http_4xx'
-		
-		# HTTP 5xx errors
-		if any(keyword in error_lower for keyword in ['500', '502', '503', '504', 'server error', 'bad gateway', 'service unavailable']):
-			return 'http_5xx'
-		
-		# Parsing errors
-		if any(keyword in error_lower for keyword in ['parse', 'parsing', 'invalid', 'malformed', 'syntax']):
-			return 'parsing'
-		
-		# Default to 'other'
-		return 'other'
-	
-	def _should_explore_url(self, url: str) -> bool:
-		"""
-		Check if URL should be explored based on include/exclude path patterns.
-		
-		Args:
-			url: URL to check
-		
-		Returns:
-			True if URL should be explored, False otherwise
-		"""
-		parsed = urlparse(url)
-		path = parsed.path
-		
-		# If include_paths specified, URL must match at least one pattern
-		if self.include_paths:
-			matches_include = False
-			for pattern in self.include_paths:
-				if self._match_path_pattern(path, pattern):
-					matches_include = True
-					break
-			if not matches_include:
-				return False
-		
-		# If exclude_paths specified, URL must not match any pattern
-		if self.exclude_paths:
-			for pattern in self.exclude_paths:
-				if self._match_path_pattern(path, pattern):
-					return False
-		
-		return True
-	
-	def _match_path_pattern(self, path: str, pattern: str) -> bool:
-		"""
-		Match path against pattern (supports * wildcard).
-		
-		Args:
-			path: URL path to match
-			pattern: Pattern with * wildcard support (e.g., '/docs/*', '/api/v1/*')
-		
-		Returns:
-			True if path matches pattern
-		"""
-		# Convert pattern to regex
-		pattern_regex = pattern.replace('*', '.*')
-		return bool(re.match(pattern_regex, path))
-	
+
 	async def explore_and_store(
 		self,
 		start_url: str,
@@ -269,16 +185,16 @@ class KnowledgePipeline:
 		# Generate job ID if not provided
 		if job_id is None:
 			job_id = uuid7str()
-		
+
 		self.current_job_id = job_id
 		self.job_status = "running"
 		self.job_paused = False
-		
+
 		# Reset enhanced tracking
 		self.job_start_time = time.time()
 		self.page_processing_times = []
 		self.recent_completed_pages = []
-		
+
 		logger.info(f"🔍 [Job {job_id}] Starting exploration from: {start_url}")
 		logger.info(f"   Max pages: {max_pages or 'unlimited'}, Max depth: {self.exploration_engine.max_depth}")
 		logger.info(f"   Strategy: {self.exploration_engine.strategy.value}")
@@ -286,7 +202,7 @@ class KnowledgePipeline:
 			logger.info(f"   Include paths: {self.include_paths}")
 		if self.exclude_paths:
 			logger.info(f"   Exclude paths: {self.exclude_paths}")
-		
+
 		results = {
 			'job_id': job_id,
 			'start_url': start_url,
@@ -296,233 +212,13 @@ class KnowledgePipeline:
 			'external_links_detected': 0,
 			'errors': [],
 			'results': [],
-			'website_metadata': {},  # Will be populated from start page
+			'website_metadata': {},
 		}
-		
+
 		try:
-			# Extract website metadata from start page
-			try:
-				start_content = await self.semantic_analyzer.extract_content(start_url)
-				results['website_metadata'] = {
-					'title': start_content.get('title', ''),
-					'description': start_content.get('description', ''),
-					'url': start_url,
-				}
-			except Exception as e:
-				logger.warning(f"Failed to extract website metadata: {e}")
-				results['website_metadata'] = {'url': start_url}
-			
-			# Emit initial progress
-			await self.progress_observer.on_progress(ExplorationProgress(
-				job_id=job_id,
-				status="running",
-				current_page=start_url,
-				pages_completed=0,
-				pages_queued=1,
-				pages_failed=0,
-			))
-			
-			# Set base URL for external link detection
-			# CRITICAL: This ensures external links are detected and NOT followed
-			self.exploration_engine.base_url = start_url
-			
-			# Discover links from start URL
-			logger.info(f"🔗 [Job {job_id}] Discovering links from start URL: {start_url}")
-			links = await self.exploration_engine.discover_links(start_url)
-			logger.info(f"   Discovered {len(links)} links from start URL")
-			
-			# Collect URLs to process (start with start_url, then discovered links)
-			urls_to_process = [start_url]
-			processed_urls = set()
-			
-			# Add discovered links (only internal links for exploration)
-			external_count = 0
-			internal_count = 0
-			filtered_count = 0
-			for link in links:
-				link_url = link.get('href', '') or link.get('url', '')
-				is_internal = link.get('internal', True)  # Default to True if not specified
-				
-				# Store all links (internal and external) for graph representation
-				try:
-					await self.storage.store_link(start_url, link_url, {
-						'anchor_text': link.get('text', ''),
-						'link_type': 'internal' if is_internal else 'external',
-					})
-				except Exception as e:
-					logger.error(f"Failed to store link {start_url} -> {link_url}: {e}")
-				
-				# Only add internal links to exploration queue
-				# CRITICAL: External links are detected and stored, but NOT explored
-				if is_internal and link_url and link_url not in processed_urls:
-					# Apply path filtering
-					if self._should_explore_url(link_url):
-						urls_to_process.append(link_url)
-						internal_count += 1
-					else:
-						filtered_count += 1
-						logger.debug(f"   ⏭️  Skipping URL due to path restrictions: {link_url}")
-				elif not is_internal:
-					external_count += 1
-					results['external_links_detected'] += 1
-					await self.progress_observer.on_external_link_detected(start_url, link_url)
-					logger.debug(f"   🔗 External link detected (not exploring): {link_url}")
-			
-			logger.info(f"   📊 Link summary: {internal_count} internal, {external_count} external, {filtered_count} filtered")
-			logger.info(f"   📋 Total URLs to process: {len(urls_to_process)}")
-			
-			# Limit to max_pages if specified
-			if max_pages:
-				original_count = len(urls_to_process)
-				urls_to_process = urls_to_process[:max_pages]
-				if len(urls_to_process) < original_count:
-					logger.info(f"   ⚠️  Limited to {max_pages} pages (had {original_count} URLs)")
-			
-			# Process each URL
-			logger.info(f"🔄 [Job {job_id}] Starting to process {len(urls_to_process)} URLs")
-			for idx, url in enumerate(urls_to_process, 1):
-				# Check for pause
-				if self.job_paused:
-					self.job_status = "paused"
-					await self.progress_observer.on_progress(ExplorationProgress(
-						job_id=job_id,
-						status="paused",
-						current_page=url,
-						pages_completed=results['pages_stored'],
-						pages_queued=len(urls_to_process) - results['pages_processed'],
-						pages_failed=results['pages_failed'],
-						links_discovered=len(links),
-						external_links_detected=results['external_links_detected'],
-					))
-					# Wait until resumed
-					while self.job_paused:
-						import asyncio
-						await asyncio.sleep(0.5)
-					self.job_status = "running"
-				
-				if url in processed_urls:
-					logger.debug(f"   ⏭️  [Job {job_id}] Skipping already processed URL: {url}")
-					continue
-				processed_urls.add(url)
-				
-				# Check for cancellation
-				if self.job_status == "cancelled":
-					logger.info(f"   ⛔ [Job {job_id}] Cancelled, stopping exploration")
-					break
-				elif self.job_status == "cancelling":
-					# Process current page, then cancel
-					logger.info(f"   ⏸️  [Job {job_id}] Cancelling after current page")
-				
-				# Track processing time
-				page_start_time = time.time()
-				logger.info(f"   📄 [Job {job_id}] Processing page {idx}/{len(urls_to_process)}: {url}")
-				
-				# Calculate enhanced metrics
-				estimated_time = self._calculate_estimated_time_remaining(
-					pages_completed=results['pages_stored'],
-					pages_queued=len(urls_to_process) - results['pages_processed'],
-					processing_times=self.page_processing_times,
-				)
-				processing_rate = self._calculate_processing_rate(self.page_processing_times)
-				
-				# Emit progress before processing
-				await self.progress_observer.on_progress(ExplorationProgress(
-					job_id=job_id,
-					status="running",
-					current_page=url,
-					pages_completed=results['pages_stored'],
-					pages_queued=len(urls_to_process) - results['pages_processed'],
-					pages_failed=results['pages_failed'],
-					links_discovered=len(links),
-					external_links_detected=results['external_links_detected'],
-					estimated_time_remaining=estimated_time,
-					processing_rate=processing_rate,
-					recent_pages=self.recent_completed_pages.copy(),
-				))
-				
-				# Process page
-				process_result = await self.process_url(url)
-				process_result['job_id'] = job_id
-				results['results'].append(process_result)
-				results['pages_processed'] += 1
-				
-				# Track processing time
-				page_processing_time = time.time() - page_start_time
-				self.page_processing_times.append(page_processing_time)
-				# Keep only last 20 processing times for rate calculation
-				if len(self.page_processing_times) > 20:
-					self.page_processing_times = self.page_processing_times[-20:]
-				
-				if process_result.get('success'):
-					results['pages_stored'] += 1
-					
-					# Track recent completed pages with titles
-					page_title = process_result.get('content', {}).get('title', url)
-					self.recent_completed_pages.append({
-						'url': url,
-						'title': page_title,
-						'completed_at': time.time(),
-					})
-					# Keep only last N pages
-					if len(self.recent_completed_pages) > self.max_recent_pages:
-						self.recent_completed_pages = self.recent_completed_pages[-self.max_recent_pages:]
-					
-					logger.info(f"   ✅ [Job {job_id}] Page {idx} completed: {page_title[:60]}... ({page_processing_time:.2f}s)")
-					await self.progress_observer.on_page_completed(url, process_result)
-					
-					# Discover and store links from this page
-					try:
-						logger.debug(f"      🔍 Discovering links from: {url}")
-						page_links = await self.exploration_engine.discover_links(url)
-						logger.debug(f"      📊 Found {len(page_links)} links on this page")
-						new_links_added = 0
-						external_links_found = 0
-						for link in page_links:
-							link_url = link.get('href', '') or link.get('url', '')
-							is_internal = link.get('internal', True)
-							
-							if link_url:
-								# Store all links (internal and external) for graph representation
-								try:
-									await self.storage.store_link(url, link_url, {
-										'anchor_text': link.get('text', ''),
-										'link_type': 'internal' if is_internal else 'external',
-									})
-								except Exception as e:
-									logger.error(f"Failed to store link {url} -> {link_url}: {e}")
-								
-								# CRITICAL: External links are detected and stored, but NOT added to exploration queue
-								if not is_internal:
-									results['external_links_detected'] += 1
-									external_links_found += 1
-									await self.progress_observer.on_external_link_detected(url, link_url)
-									logger.debug(f"         🔗 External: {link_url}")
-								elif link_url not in processed_urls and link_url not in urls_to_process:
-									# Apply path filtering before adding to queue
-									if self._should_explore_url(link_url):
-										urls_to_process.append(link_url)
-										new_links_added += 1
-									else:
-										logger.debug(f"         ⏭️  Filtered: {link_url}")
-						if new_links_added > 0 or external_links_found > 0:
-							logger.info(f"      📈 Links: {new_links_added} new internal, {external_links_found} external")
-					except Exception as e:
-						logger.error(f"      ❌ Failed to discover links from {url}: {e}", exc_info=True)
-						await self.progress_observer.on_error(url, str(e))
-				else:
-					results['pages_failed'] += 1
-					results['errors'].append(process_result)
-					error_msg = process_result.get('error', 'Unknown error')
-					error_type = process_result.get('error_type', 'unknown')
-					logger.warning(f"   ❌ [Job {job_id}] Page {idx} failed ({error_type}): {error_msg}")
-					await self.progress_observer.on_error(url, error_msg)
-				
-				# Check if cancelling after current page
-				if self.job_status == "cancelling":
-					self.job_status = "cancelled"
-					logger.info(f"Job {job_id} cancelled after processing current page")
-					break
-			
+			# Process exploration loop (delegated to helper module)
+			await process_exploration_loop(self, start_url, max_pages, job_id, results)
+
 			# Mark as completed (unless cancelled)
 			if self.job_status != "cancelled":
 				self.job_status = "completed"
@@ -533,10 +229,10 @@ class KnowledgePipeline:
 				pages_completed=results['pages_stored'],
 				pages_queued=0,
 				pages_failed=results['pages_failed'],
-				links_discovered=len(links),
+				links_discovered=0,
 				external_links_detected=results['external_links_detected'],
 			))
-			
+
 			total_time = time.time() - self.job_start_time if self.job_start_time else 0
 			logger.info("=" * 80)
 			logger.info(f"🏁 [Job {job_id}] Exploration complete")
@@ -566,117 +262,42 @@ class KnowledgePipeline:
 			))
 		finally:
 			self.current_job_id = None
-		
+
 		return results
-	
+
 	def pause_job(self) -> bool:
-		"""
-		Pause the current exploration job.
-		
-		Returns:
-			True if job was paused, False if no job running
-		"""
+		"""Pause the current exploration job."""
 		if self.job_status == "running":
 			self.job_paused = True
 			return True
 		return False
-	
+
 	def resume_job(self) -> bool:
-		"""
-		Resume the paused exploration job.
-		
-		Returns:
-			True if job was resumed, False if no job paused
-		"""
+		"""Resume the paused exploration job."""
 		if self.job_status == "paused" and self.job_paused:
 			self.job_paused = False
 			return True
 		return False
-	
+
 	def cancel_job(self, wait_for_current_page: bool = False) -> bool:
-		"""
-		Cancel the current exploration job.
-		
-		Args:
-			wait_for_current_page: If True, wait for current page to complete before cancelling
-		
-		Returns:
-			True if job was cancelled, False if no job running
-		"""
+		"""Cancel the current exploration job."""
 		if self.job_status in ("running", "paused"):
 			if wait_for_current_page:
-				# Set flag to cancel after current page completes
 				self.job_status = "cancelling"
 			else:
-				# Cancel immediately
 				self.job_status = "cancelled"
 				self.job_paused = False
 			return True
 		return False
-	
+
 	def get_job_status(self) -> dict[str, Any]:
-		"""
-		Get current job status.
-		
-		Returns:
-			Dictionary with job status information
-		"""
+		"""Get current job status."""
 		return {
 			'job_id': self.current_job_id,
 			'status': self.job_status,
 			'paused': self.job_paused,
 		}
-	
-	def _calculate_estimated_time_remaining(
-		self,
-		pages_completed: int,
-		pages_queued: int,
-		processing_times: list[float],
-	) -> float | None:
-		"""
-		Calculate estimated time remaining based on average processing time.
-		
-		Args:
-			pages_completed: Number of pages completed
-			pages_queued: Number of pages remaining
-			processing_times: List of page processing times in seconds
-		
-		Returns:
-			Estimated time remaining in seconds, or None if cannot calculate
-		"""
-		if not processing_times or pages_queued == 0:
-			return None
-		
-		# Calculate average processing time
-		avg_time = sum(processing_times) / len(processing_times)
-		
-		# Estimate remaining time
-		estimated = avg_time * pages_queued
-		return estimated
-	
-	def _calculate_processing_rate(self, processing_times: list[float]) -> float | None:
-		"""
-		Calculate processing rate (pages per minute).
-		
-		Args:
-			processing_times: List of page processing times in seconds
-		
-		Returns:
-			Processing rate in pages per minute, or None if cannot calculate
-		"""
-		if not processing_times:
-			return None
-		
-		# Calculate average processing time per page
-		avg_time = sum(processing_times) / len(processing_times)
-		
-		if avg_time == 0:
-			return None
-		
-		# Convert to pages per minute
-		pages_per_minute = 60.0 / avg_time
-		return pages_per_minute
-	
+
 	async def search_similar(self, query_text: str, top_k: int = 5) -> list[dict[str, Any]]:
 		"""
 		Search for similar pages using semantic search.
@@ -691,10 +312,10 @@ class KnowledgePipeline:
 		try:
 			# Generate query embedding
 			query_embedding = self.semantic_analyzer.generate_embedding(query_text)
-			
+
 			# Search for similar embeddings
 			similar_results = await self.vector_store.search_similar(query_embedding, top_k=top_k)
-			
+
 			# Enrich results with page data
 			enriched_results = []
 			for result in similar_results:
@@ -707,7 +328,7 @@ class KnowledgePipeline:
 							'score': result.get('score', 0.0),
 							'page_data': page_data,
 						})
-			
+
 			return enriched_results
 		except Exception as e:
 			logger.error(f"Failed to search similar: {e}")

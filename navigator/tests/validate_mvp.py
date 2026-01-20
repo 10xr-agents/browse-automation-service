@@ -16,7 +16,6 @@ import time
 
 from browser_use import BrowserSession
 from browser_use.browser.profile import BrowserProfile
-
 from navigator.action.command import (
 	ClickActionCommand,
 	NavigateActionCommand,
@@ -73,7 +72,7 @@ async def test_step1_browser_creation_and_destruction():
 		for i, browser in enumerate(browsers):
 			assert browser._cdp_client_root is not None, f'Browser {i + 1} lost connection'
 
-		logger.info(f'\n✓ All 10 browsers created successfully')
+		logger.info('\n✓ All 10 browsers created successfully')
 		logger.info(f'  Average creation time: {sum(start_times) / len(start_times):.2f}s')
 		logger.info(f'  Max creation time: {max(start_times):.2f}s')
 		logger.info(f'  Min creation time: {min(start_times):.2f}s')
@@ -952,7 +951,7 @@ async def test_step4_dom_state_detection():
 		assert dom_state is not None, 'DOM state is None'
 
 		logger.info(f'  ✓ DOM state built in {dom_build_time:.2f}ms')
-		
+
 		# Check if DOM state has selector map (indicates DOM was built)
 		dom_state = state_summary.dom_state
 		assert hasattr(dom_state, 'selector_map'), 'DOM state missing selector_map'
@@ -1111,7 +1110,7 @@ async def test_step4_accessibility_tree_extraction():
 				logger.info(f'  ✓ Element has accessibility node: {element.ax_node.get("role", "unknown") if isinstance(element.ax_node, dict) else "available"}')
 		else:
 			logger.info('  ✓ DOM tree built (no interactive elements found on this page)')
-		
+
 		# Verify DOM state was built successfully
 		dom_state = state_summary.dom_state
 		assert dom_state is not None, 'DOM state is None'
@@ -1298,7 +1297,7 @@ async def test_step5_video_file_creation():
 			# Check if video file was created
 			await asyncio.sleep(0.5)  # Give time for file to be written
 			video_files = list(Path(temp_dir).glob('*.mp4'))
-			
+
 			if video_files:
 				video_file = video_files[0]
 				file_size = video_file.stat().st_size
@@ -1750,7 +1749,6 @@ async def run_step9_tests():
 # STEP 10: MCP Server for Voice Agent Integration
 # ============================================================================
 
-import json
 
 
 async def test_step10_mcp_server_initialization():

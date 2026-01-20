@@ -1,8 +1,8 @@
 """Action primitives and execution."""
 from navigator.action.command import (
 	ActionCommand,
-	ActionType,
 	ActionResult,
+	ActionType,
 	BrowserContext,
 	BrowserStateChange,
 	ClickActionCommand,

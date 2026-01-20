@@ -7,7 +7,6 @@ Note: These tests require LiveKit SDK and may require a LiveKit server for full 
 
 import asyncio
 import logging
-import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,7 +16,7 @@ async def test_livekit_service_import():
 	"""Test that LiveKit service can be imported."""
 	logger.info('Testing LiveKit service import...')
 	try:
-		from navigator.streaming.livekit import LiveKitStreamingService, LIVEKIT_AVAILABLE
+		from navigator.streaming.livekit import LIVEKIT_AVAILABLE, LiveKitStreamingService
 
 		if not LIVEKIT_AVAILABLE:
 			logger.warning('LiveKit SDK not installed')
@@ -87,7 +86,7 @@ async def test_livekit_service_structure():
 	"""Test LiveKit service structure."""
 	logger.info('Testing LiveKit service structure...')
 	try:
-		from navigator.streaming.livekit import LiveKitStreamingService, LIVEKIT_AVAILABLE
+		from navigator.streaming.livekit import LIVEKIT_AVAILABLE, LiveKitStreamingService
 
 		if not LIVEKIT_AVAILABLE:
 			logger.warning('⚠️  LiveKit SDK not installed - skipping structure test')

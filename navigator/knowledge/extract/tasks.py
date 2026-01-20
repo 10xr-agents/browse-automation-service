@@ -32,7 +32,7 @@ class IOInput(BaseModel):
 	source: str = Field(..., description="Where to get value: user_input|task_context|session_context|global_context")
 	volatility: str = Field(..., description="Volatility level: high|medium|low")
 	default: Any | None = Field(None, description="Default value if not provided")
-	
+
 	@field_validator('volatility')
 	@classmethod
 	def validate_volatility(cls, v: str) -> str:
@@ -40,7 +40,7 @@ class IOInput(BaseModel):
 		if v not in valid_levels:
 			raise ValueError(f"Invalid volatility: {v}. Must be one of {valid_levels}")
 		return v
-	
+
 	@field_validator('source')
 	@classmethod
 	def validate_source(cls, v: str) -> str:
@@ -87,7 +87,7 @@ class IteratorSpec(BaseModel):
 		},
 		description="Error handling strategy"
 	)
-	
+
 	@field_validator('type')
 	@classmethod
 	def validate_type(cls, v: str) -> str:
@@ -139,6 +139,36 @@ class TaskDefinition(BaseModel):
 	failure_recovery: dict[str, Any] = Field(default_factory=dict, description="Failure recovery strategies")
 	metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
+	# Cross-reference fields (Phase 1: Schema Updates)
+	business_function_ids: list[str] = Field(
+		default_factory=list,
+		description="Business function IDs this task supports"
+	)
+	user_flow_ids: list[str] = Field(
+		default_factory=list,
+		description="User flow IDs that include this task"
+	)
+	screen_ids: list[str] = Field(
+		default_factory=list,
+		description="Screen IDs where this task can be performed"
+	)
+	action_ids: list[str] = Field(
+		default_factory=list,
+		description="Action IDs required to complete this task"
+	)
+	workflow_ids: list[str] = Field(
+		default_factory=list,
+		description="Workflow IDs that include this task"
+	)
+	prerequisite_task_ids: list[str] = Field(
+		default_factory=list,
+		description="Task IDs that must be completed before this task"
+	)
+	dependent_task_ids: list[str] = Field(
+		default_factory=list,
+		description="Task IDs that depend on this task"
+	)
+
 
 # =============================================================================
 # Task Extraction Result
@@ -151,7 +181,7 @@ class TaskExtractionResult(BaseModel):
 	success: bool = Field(default=True, description="Whether extraction succeeded")
 	errors: list[dict[str, Any]] = Field(default_factory=list, description="Extraction errors")
 	statistics: dict[str, Any] = Field(default_factory=dict, description="Extraction statistics")
-	
+
 	def add_error(self, error_type: str, message: str, context: dict[str, Any] | None = None) -> None:
 		"""Add an error to the result."""
 		self.errors.append({
@@ -160,7 +190,7 @@ class TaskExtractionResult(BaseModel):
 			'context': context or {}
 		})
 		self.success = False
-	
+
 	def calculate_statistics(self) -> None:
 		"""Calculate extraction statistics."""
 		self.statistics = {
@@ -170,7 +200,7 @@ class TaskExtractionResult(BaseModel):
 			'total_steps': sum(len(t.steps) for t in self.tasks),
 			'avg_steps_per_task': sum(len(t.steps) for t in self.tasks) / len(self.tasks) if self.tasks else 0,
 			'tasks_with_high_volatility_inputs': sum(
-				1 for t in self.tasks 
+				1 for t in self.tasks
 				if any(inp.volatility == 'high' for inp in t.io_spec.inputs)
 			),
 		}
@@ -190,7 +220,7 @@ class TaskExtractor:
 	- **Linear step validation** (no backward references)
 	- Schema validation
 	"""
-	
+
 	def __init__(self, website_id: str = "unknown"):
 		"""
 		Initialize task extractor.
@@ -199,7 +229,7 @@ class TaskExtractor:
 			website_id: Website identifier for extracted tasks
 		"""
 		self.website_id = website_id
-	
+
 	def extract_tasks(self, content_chunks: list[ContentChunk]) -> TaskExtractionResult:
 		"""
 		Extract task definitions from content chunks.
@@ -211,17 +241,17 @@ class TaskExtractor:
 			TaskExtractionResult with extracted tasks
 		"""
 		result = TaskExtractionResult()
-		
+
 		try:
 			logger.info(f"Extracting tasks from {len(content_chunks)} content chunks")
-			
+
 			for chunk in content_chunks:
 				tasks = self._extract_tasks_from_chunk(chunk)
 				result.tasks.extend(tasks)
-			
+
 			# Deduplicate tasks
 			result.tasks = self._deduplicate_tasks(result.tasks)
-			
+
 			# Validate extracted tasks
 			for task in result.tasks:
 				validation_errors = self._validate_task(task)
@@ -231,22 +261,22 @@ class TaskExtractor:
 						f"Task '{task.task_id}' failed validation",
 						{"task_id": task.task_id, "errors": validation_errors}
 					)
-			
+
 			# Calculate statistics
 			result.calculate_statistics()
-			
+
 			logger.info(
 				f"✅ Extracted {result.statistics['total_tasks']} tasks "
 				f"({result.statistics['tasks_with_iterators']} with iterators, "
 				f"{result.statistics['tasks_with_io_spec']} with IO specs)"
 			)
-		
+
 		except Exception as e:
 			logger.error(f"❌ Error extracting tasks: {e}", exc_info=True)
 			result.add_error("ExtractionError", str(e), {"exception_type": type(e).__name__})
-		
+
 		return result
-	
+
 	def _extract_tasks_from_chunk(self, chunk: ContentChunk) -> list[TaskDefinition]:
 		"""
 		Extract tasks from a single content chunk.
@@ -258,31 +288,31 @@ class TaskExtractor:
 			List of extracted task definitions
 		"""
 		tasks = []
-		
+
 		# Pattern: Look for task/workflow descriptions
 		task_patterns = [
 			r'(?:Task|Workflow|Procedure):\s+(.+)',
 			r'##\s+(?:How to|To)\s+(.+)',
 			r'### (.+?)\s+(?:Task|Workflow|Process)',
 		]
-		
+
 		for pattern in task_patterns:
 			matches = re.finditer(pattern, chunk.content, re.IGNORECASE | re.MULTILINE)
 			for match in matches:
 				task_name = match.group(1).strip()
 				task_id = self._generate_task_id(task_name)
-				
+
 				# Extract context around the match
 				start = max(0, match.start() - 200)
 				end = min(len(chunk.content), match.end() + 1500)
 				context = chunk.content[start:end]
-				
+
 				# Create task definition
 				task = self._create_task_from_context(task_id, task_name, context)
 				tasks.append(task)
-		
+
 		return tasks
-	
+
 	def _create_task_from_context(
 		self,
 		task_id: str,
@@ -302,16 +332,16 @@ class TaskExtractor:
 		"""
 		# Extract iterator spec (Agent-Killer #1)
 		iterator_spec = self._extract_iterator_spec(context)
-		
+
 		# Extract IO spec (Agent-Killer #3)
 		io_spec = self._extract_io_spec(context)
-		
+
 		# Extract steps
 		steps = self._extract_steps(context)
-		
+
 		# Validate linearity
 		self._validate_step_linearity(steps)
-		
+
 		return TaskDefinition(
 			task_id=task_id,
 			name=task_name,
@@ -325,7 +355,7 @@ class TaskExtractor:
 				'extracted_from': 'documentation',
 			}
 		)
-	
+
 	def _extract_iterator_spec(self, context: str) -> IteratorSpec:
 		"""
 		Extract iterator specification (Agent-Killer #1).
@@ -347,14 +377,14 @@ class TaskExtractor:
 				r'paginate\s+through\s+(.+)',
 			]
 		}
-		
+
 		# Check for collection processing
 		for pattern in iterator_patterns['collection_processing']:
 			match = re.search(pattern, context, re.IGNORECASE)
 			if match:
 				collection_name = match.group(1).strip()
 				logger.info(f"🔁 Detected collection_processing iterator: {collection_name}")
-				
+
 				return IteratorSpec(
 					type='collection_processing',
 					collection_selector=f".{collection_name}-row",  # Infer selector
@@ -370,14 +400,14 @@ class TaskExtractor:
 					max_iterations=50,
 					continue_on_error=False
 				)
-		
+
 		# Check for pagination
 		for pattern in iterator_patterns['pagination']:
 			match = re.search(pattern, context, re.IGNORECASE)
 			if match:
 				condition = match.group(1).strip()
 				logger.info(f"🔁 Detected pagination iterator: {condition}")
-				
+
 				return IteratorSpec(
 					type='pagination',
 					item_action={
@@ -392,10 +422,10 @@ class TaskExtractor:
 					max_iterations=50,
 					continue_on_error=False
 				)
-		
+
 		# No iterator detected
 		return IteratorSpec(type='none')
-	
+
 	def _extract_io_spec(self, context: str) -> IOSpec:
 		"""
 		Extract IO specification (Agent-Killer #3).
@@ -403,7 +433,7 @@ class TaskExtractor:
 		Extracts inputs/outputs with volatility levels for context resolution.
 		"""
 		io_spec = IOSpec()
-		
+
 		# Extract inputs (variables that need to be provided)
 		input_patterns = [
 			r'enter\s+(?:your\s+|the\s+)?([A-Z][a-z\s]+)',
@@ -411,16 +441,16 @@ class TaskExtractor:
 			r'input\s+(?:the\s+)?([A-Z][a-z\s]+)',
 			r'type\s+(?:in\s+|your\s+)?([A-Z][a-z\s]+)',
 		]
-		
+
 		for pattern in input_patterns:
 			matches = re.finditer(pattern, context, re.IGNORECASE)
 			for match in matches:
 				input_name = match.group(1).strip()
 				input_var_name = self._normalize_variable_name(input_name)
-				
+
 				# Determine volatility based on keywords
 				volatility = self._determine_volatility(input_name)
-				
+
 				# Don't add duplicates
 				if not any(inp.name == input_var_name for inp in io_spec.inputs):
 					io_spec.inputs.append(IOInput(
@@ -431,20 +461,20 @@ class TaskExtractor:
 						source="user_input",
 						volatility=volatility
 					))
-		
+
 		# Extract outputs (values that will be produced)
 		output_patterns = [
 			r'(?:creates?|generates?)\s+(?:a\s+|an\s+)?([A-Z][a-z\s]+)',
 			r'(?:returns?|outputs?)\s+(?:the\s+)?([A-Z][a-z\s]+)',
 			r'note\s+the\s+([A-Z][a-z\s]+)',
 		]
-		
+
 		for pattern in output_patterns:
 			matches = re.finditer(pattern, context, re.IGNORECASE)
 			for match in matches:
 				output_name = match.group(1).strip()
 				output_var_name = self._normalize_variable_name(output_name)
-				
+
 				if not any(out.name == output_var_name for out in io_spec.outputs):
 					io_spec.outputs.append(IOOutput(
 						name=output_var_name,
@@ -456,9 +486,9 @@ class TaskExtractor:
 							"attribute": "text"
 						}
 					))
-		
+
 		return io_spec
-	
+
 	def _determine_volatility(self, input_name: str) -> str:
 		"""
 		Determine volatility level based on input name.
@@ -469,7 +499,7 @@ class TaskExtractor:
 		- low: Names, emails (cache indefinitely)
 		"""
 		input_lower = input_name.lower()
-		
+
 		# High volatility (always refresh)
 		high_volatility_keywords = [
 			'token', 'password', 'mfa', '2fa', 'otp', 'code',
@@ -478,7 +508,7 @@ class TaskExtractor:
 		for keyword in high_volatility_keywords:
 			if keyword in input_lower:
 				return 'high'
-		
+
 		# Medium volatility (cache with TTL)
 		medium_volatility_keywords = [
 			'session', 'status', 'count', 'balance', 'quota'
@@ -486,25 +516,25 @@ class TaskExtractor:
 		for keyword in medium_volatility_keywords:
 			if keyword in input_lower:
 				return 'medium'
-		
+
 		# Low volatility (cache indefinitely)
 		return 'low'
-	
+
 	def _extract_steps(self, context: str) -> list[TaskStep]:
 		"""Extract task steps from context."""
 		steps = []
-		
+
 		# Look for numbered steps
 		step_pattern = r'(?:^|\n)\s*(\d+)[\.\)]\s+(.+?)(?=\n\s*\d+[\.\)]|\n\n|$)'
 		matches = re.finditer(step_pattern, context, re.MULTILINE | re.DOTALL)
-		
+
 		for match in matches:
 			step_num = int(match.group(1))
 			step_text = match.group(2).strip()
-			
+
 			# Determine step type
 			step_type = self._determine_step_type(step_text)
-			
+
 			steps.append(TaskStep(
 				step_id=f"step_{step_num}",
 				order=step_num,
@@ -514,13 +544,13 @@ class TaskExtractor:
 					"description": step_text
 				}
 			))
-		
+
 		return steps
-	
+
 	def _determine_step_type(self, step_text: str) -> str:
 		"""Determine step type from text."""
 		step_lower = step_text.lower()
-		
+
 		if any(word in step_lower for word in ['navigate', 'go to', 'open']):
 			return 'navigation'
 		elif any(word in step_lower for word in ['enter', 'type', 'input', 'fill']):
@@ -533,14 +563,14 @@ class TaskExtractor:
 			return 'selection'
 		else:
 			return 'action'
-	
+
 	def _extract_description(self, context: str) -> str:
 		"""Extract task description from context."""
 		# Get first few sentences
 		sentences = context.split('.')[:3]
 		description = '. '.join(s.strip() for s in sentences if s.strip())
 		return description[:200] if description else "No description"
-	
+
 	def _validate_step_linearity(self, steps: list[TaskStep]) -> None:
 		"""
 		Validate that steps are linear (DAG) with no backward references.
@@ -549,23 +579,23 @@ class TaskExtractor:
 		"""
 		if not steps:
 			return
-		
+
 		# Check that steps are sequentially ordered
 		for i, step in enumerate(steps, start=1):
 			if step.order != i:
 				logger.warning(f"⚠️ Step order mismatch: expected {i}, got {step.order}")
-		
+
 		# Check for backward references (would create loops)
 		for step in steps:
 			# In action description, look for references to previous steps
 			action_text = str(step.action)
-			
+
 			# Pattern: "go back to step X" or "repeat step Y"
 			backward_patterns = [
 				r'(?:go back to|return to|repeat)\s+step\s+(\d+)',
 				r'step\s+(\d+)\s+again',
 			]
-			
+
 			for pattern in backward_patterns:
 				match = re.search(pattern, action_text, re.IGNORECASE)
 				if match:
@@ -578,7 +608,7 @@ class TaskExtractor:
 							f"Step {step.order} contains backward reference to step {ref_step}. "
 							f"This creates a graph loop. Convert to iterator_spec instead!"
 						)
-	
+
 	def _normalize_variable_name(self, name: str) -> str:
 		"""Normalize variable name (snake_case)."""
 		# Convert to lowercase, replace spaces with underscores
@@ -586,23 +616,23 @@ class TaskExtractor:
 		normalized = re.sub(r'[^\w\s-]', '', normalized)
 		normalized = re.sub(r'[-\s]+', '_', normalized)
 		return normalized
-	
+
 	def _generate_task_id(self, task_name: str) -> str:
 		"""Generate task ID from task name."""
 		return self._normalize_variable_name(task_name)
-	
+
 	def _deduplicate_tasks(self, tasks: list[TaskDefinition]) -> list[TaskDefinition]:
 		"""Deduplicate tasks by task_id."""
 		seen = set()
 		unique = []
-		
+
 		for task in tasks:
 			if task.task_id not in seen:
 				seen.add(task.task_id)
 				unique.append(task)
-		
+
 		return unique
-	
+
 	def _validate_task(self, task: TaskDefinition) -> list[str]:
 		"""
 		Validate task definition against schema.
@@ -611,27 +641,27 @@ class TaskExtractor:
 			List of validation errors (empty if valid)
 		"""
 		errors = []
-		
+
 		# Validate required fields
 		if not task.task_id:
 			errors.append("Missing task_id")
 		if not task.name:
 			errors.append("Missing name")
-		
+
 		# Validate iterator spec type
 		if task.iterator_spec.type not in ['none', 'collection_processing', 'pagination']:
 			errors.append(f"Invalid iterator type: {task.iterator_spec.type}")
-		
+
 		# Validate steps are sequential
 		for i, step in enumerate(task.steps, start=1):
 			if step.order != i:
 				errors.append(f"Step order not sequential: expected {i}, got {step.order}")
-		
+
 		# Validate IO spec
 		for inp in task.io_spec.inputs:
 			if inp.volatility not in ['high', 'medium', 'low']:
 				errors.append(f"Invalid volatility for input '{inp.name}': {inp.volatility}")
-		
+
 		return errors
 
 
@@ -647,9 +677,9 @@ def validate_task_definition(task: TaskDefinition) -> bool:
 	"""
 	extractor = TaskExtractor()
 	errors = extractor._validate_task(task)
-	
+
 	if errors:
 		logger.error(f"Task validation failed: {errors}")
 		return False
-	
+
 	return True

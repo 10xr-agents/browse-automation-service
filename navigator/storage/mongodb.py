@@ -82,7 +82,7 @@ def get_mongodb_database_name() -> str:
 	database_name = os.getenv("MONGODB_DATABASE")
 	if database_name:
 		return database_name
-	
+
 	# Try to extract from MongoDB URI (format: mongodb://.../database_name?options)
 	mongodb_uri = os.getenv("MONGODB_URI") or os.getenv("MONGODB_URL")
 	if mongodb_uri:
@@ -96,7 +96,7 @@ def get_mongodb_database_name() -> str:
 					return db_name
 		except Exception:
 			pass  # If parsing fails, continue to error
-	
+
 	raise ValueError(
 		"MongoDB database name not found. "
 		"Please set MONGODB_DATABASE in your .env.local file, "
@@ -112,13 +112,13 @@ async def get_mongodb_client():
 		MongoDB client instance or None if MongoDB not available
 	"""
 	global _mongodb_client
-	
+
 	if _mongodb_client is None:
 		try:
 			from motor.motor_asyncio import AsyncIOMotorClient
-			
+
 			mongodb_url = get_mongodb_url()
-			
+
 			# Configure connection with reasonable timeouts
 			# serverSelectionTimeoutMS: How long to wait for server selection (default 30s is too long)
 			# connectTimeoutMS: How long to wait for initial connection (default 20s)
@@ -129,7 +129,7 @@ async def get_mongodb_client():
 				connectTimeoutMS=5000,  # 5 seconds for initial connection
 				socketTimeoutMS=10000,  # 10 seconds for socket operations
 			)
-			
+
 			# Test connection with shorter timeout
 			await asyncio.wait_for(
 				_mongodb_client.admin.command('ping'),
@@ -154,7 +154,7 @@ async def get_mongodb_client():
 			logger.error(f"   Connection string: {mongodb_url}")
 			_mongodb_client = None
 			return None
-	
+
 	return _mongodb_client
 
 
@@ -166,16 +166,16 @@ async def get_mongodb_database():
 		MongoDB database instance or None if MongoDB not available
 	"""
 	global _mongodb_db
-	
+
 	if _mongodb_db is None:
 		client = await get_mongodb_client()
 		if client is None:
 			return None
-		
+
 		database_name = get_mongodb_database_name()
 		_mongodb_db = client[database_name]
 		logger.info(f"MongoDB database '{database_name}' initialized")
-	
+
 	return _mongodb_db
 
 
@@ -192,7 +192,7 @@ async def get_collection(collection_name: str):
 	db = await get_mongodb_database()
 	if db is None:
 		return None
-	
+
 	prefixed_name = get_collection_name(collection_name)
 	return db[prefixed_name]
 
@@ -200,7 +200,7 @@ async def get_collection(collection_name: str):
 async def close_mongodb_connection():
 	"""Close MongoDB connection."""
 	global _mongodb_client, _mongodb_db
-	
+
 	if _mongodb_client:
 		_mongodb_client.close()
 		_mongodb_client = None

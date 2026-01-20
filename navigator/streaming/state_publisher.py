@@ -23,7 +23,7 @@ def generate_update_id() -> str:
 
 class StatePublisher:
 	"""Publishes state updates to Redis Streams."""
-	
+
 	def __init__(self, redis_client: Any | None = None):
 		"""Initialize state publisher.
 		
@@ -32,7 +32,7 @@ class StatePublisher:
 		"""
 		self.redis_client = redis_client
 		logger.debug(f"StatePublisher initialized (redis: {'enabled' if redis_client else 'disabled'})")
-	
+
 	async def publish_state_update(
 		self,
 		room_name: str,
@@ -57,15 +57,15 @@ class StatePublisher:
 		if not self.redis_client:
 			logger.debug("Redis client not available, skipping state update publish")
 			return
-		
+
 		try:
 			# Generate update ID
 			update_id = generate_update_id()
-			
+
 			# Get timestamps
 			now_ms = int(time.time() * 1000)
 			received_at = received_at_ms or now_ms
-			
+
 			# Build current state summary
 			current_state_summary = {
 				"url": post_state.url,
@@ -81,7 +81,7 @@ class StatePublisher:
 				"forms_count": 0,  # TODO: Count forms
 				"state_hash": state_diff.get("post_state_hash", ""),
 			}
-			
+
 			# Build state update envelope
 			state_update = {
 				"version": "1.0",
@@ -118,25 +118,25 @@ class StatePublisher:
 					"focused_element": None,  # TODO: Track focus
 				},
 			}
-			
+
 			# Publish to stream
 			stream_key = f"state:{room_name}"
-			
+
 			# Convert to bytes for Redis (JSON encode the entire message)
 			state_update_json = json.dumps(state_update)
 			stream_data = {
 				b"state_update": state_update_json.encode('utf-8'),
 			}
-			
+
 			message_id = await self.redis_client.xadd(
 				stream_key,
 				stream_data,
 				maxlen=10000,  # Keep last 10k messages
 				approximate=True,
 			)
-			
+
 			logger.debug(f"Published state update {update_id} to stream {stream_key} (message_id: {message_id})")
-			
+
 		except Exception as e:
 			logger.error(f"Failed to publish state update to stream: {e}", exc_info=True)
 			# Don't raise - state update publishing is non-critical

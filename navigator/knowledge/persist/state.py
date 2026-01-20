@@ -17,11 +17,10 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from navigator.knowledge.persist.collections import (
 	WorkflowStatus,
-	WorkflowStateCollection,
 	get_workflow_state_collection,
 )
 
@@ -44,11 +43,12 @@ class WorkflowState(BaseModel):
 	metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 	created_at: datetime = Field(default_factory=datetime.utcnow, description="Creation timestamp")
 	updated_at: datetime = Field(default_factory=datetime.utcnow, description="Last update timestamp")
-	
-	class Config:
-		json_encoders = {
+
+	model_config = ConfigDict(
+		json_encoders={
 			datetime: lambda v: v.isoformat(),
 		}
+	)
 
 
 async def save_workflow_state(state: WorkflowState) -> bool:
@@ -65,13 +65,13 @@ async def save_workflow_state(state: WorkflowState) -> bool:
 	"""
 	try:
 		collection = await get_workflow_state_collection()
-		if not collection:
+		if collection is None:
 			logger.warning("MongoDB unavailable, workflow state not persisted")
 			return False
-		
+
 		# Update timestamp
 		state.updated_at = datetime.utcnow()
-		
+
 		# Upsert by workflow_id
 		state_dict = state.dict()
 		await collection.update_one(
@@ -79,10 +79,10 @@ async def save_workflow_state(state: WorkflowState) -> bool:
 			{'$set': state_dict},
 			upsert=True
 		)
-		
+
 		logger.info(f"Saved workflow state: workflow_id={state.workflow_id}, status={state.status}, progress={state.progress}%")
 		return True
-	
+
 	except Exception as e:
 		logger.error(f"Failed to save workflow state: {e}")
 		return False
@@ -100,22 +100,22 @@ async def load_workflow_state(workflow_id: str) -> WorkflowState | None:
 	"""
 	try:
 		collection = await get_workflow_state_collection()
-		if not collection:
+		if collection is None:
 			logger.warning("MongoDB unavailable, cannot load workflow state")
 			return None
-		
+
 		state_dict = await collection.find_one({'workflow_id': workflow_id})
 		if not state_dict:
 			logger.debug(f"Workflow state not found: workflow_id={workflow_id}")
 			return None
-		
+
 		# Remove MongoDB _id field
 		state_dict.pop('_id', None)
-		
+
 		state = WorkflowState(**state_dict)
 		logger.debug(f"Loaded workflow state: workflow_id={workflow_id}, status={state.status}")
 		return state
-	
+
 	except Exception as e:
 		logger.error(f"Failed to load workflow state: {e}")
 		return None
@@ -133,22 +133,22 @@ async def load_workflow_state_by_job_id(job_id: str) -> WorkflowState | None:
 	"""
 	try:
 		collection = await get_workflow_state_collection()
-		if not collection:
+		if collection is None:
 			logger.warning("MongoDB unavailable, cannot load workflow state")
 			return None
-		
+
 		state_dict = await collection.find_one({'job_id': job_id})
 		if not state_dict:
 			logger.debug(f"Workflow state not found: job_id={job_id}")
 			return None
-		
+
 		# Remove MongoDB _id field
 		state_dict.pop('_id', None)
-		
+
 		state = WorkflowState(**state_dict)
 		logger.debug(f"Loaded workflow state: job_id={job_id}, status={state.status}")
 		return state
-	
+
 	except Exception as e:
 		logger.error(f"Failed to load workflow state by job_id: {e}")
 		return None
@@ -174,33 +174,33 @@ async def update_workflow_progress(
 	"""
 	try:
 		collection = await get_workflow_state_collection()
-		if not collection:
+		if collection is None:
 			logger.warning("MongoDB unavailable, progress not updated")
 			return False
-		
+
 		# Build update document
 		update_doc = {
 			'phase': phase,
 			'progress': min(100.0, max(0.0, progress)),  # Clamp to [0, 100]
 			'updated_at': datetime.utcnow(),
 		}
-		
+
 		if status:
 			update_doc['status'] = status.value
-		
+
 		# Update workflow state
 		result = await collection.update_one(
 			{'workflow_id': workflow_id},
 			{'$set': update_doc}
 		)
-		
+
 		if result.matched_count > 0:
 			logger.info(f"Updated workflow progress: workflow_id={workflow_id}, phase={phase}, progress={progress}%")
 			return True
 		else:
 			logger.warning(f"Workflow state not found for progress update: workflow_id={workflow_id}")
 			return False
-	
+
 	except Exception as e:
 		logger.error(f"Failed to update workflow progress: {e}")
 		return False
@@ -219,10 +219,10 @@ async def record_workflow_error(workflow_id: str, error: str) -> bool:
 	"""
 	try:
 		collection = await get_workflow_state_collection()
-		if not collection:
+		if collection is None:
 			logger.warning("MongoDB unavailable, error not recorded")
 			return False
-		
+
 		# Append error to errors array
 		result = await collection.update_one(
 			{'workflow_id': workflow_id},
@@ -234,14 +234,14 @@ async def record_workflow_error(workflow_id: str, error: str) -> bool:
 				}
 			}
 		)
-		
+
 		if result.matched_count > 0:
 			logger.error(f"Recorded workflow error: workflow_id={workflow_id}, error={error}")
 			return True
 		else:
 			logger.warning(f"Workflow state not found for error recording: workflow_id={workflow_id}")
 			return False
-	
+
 	except Exception as e:
 		logger.error(f"Failed to record workflow error: {e}")
 		return False
@@ -260,10 +260,10 @@ async def record_workflow_warning(workflow_id: str, warning: str) -> bool:
 	"""
 	try:
 		collection = await get_workflow_state_collection()
-		if not collection:
+		if collection is None:
 			logger.warning("MongoDB unavailable, warning not recorded")
 			return False
-		
+
 		# Append warning to warnings array
 		result = await collection.update_one(
 			{'workflow_id': workflow_id},
@@ -272,14 +272,14 @@ async def record_workflow_warning(workflow_id: str, warning: str) -> bool:
 				'$set': {'updated_at': datetime.utcnow()}
 			}
 		)
-		
+
 		if result.matched_count > 0:
 			logger.warning(f"Recorded workflow warning: workflow_id={workflow_id}, warning={warning}")
 			return True
 		else:
 			logger.warning(f"Workflow state not found for warning recording: workflow_id={workflow_id}")
 			return False
-	
+
 	except Exception as e:
 		logger.error(f"Failed to record workflow warning: {e}")
 		return False
@@ -297,10 +297,10 @@ async def mark_workflow_completed(workflow_id: str) -> bool:
 	"""
 	try:
 		collection = await get_workflow_state_collection()
-		if not collection:
+		if collection is None:
 			logger.warning("MongoDB unavailable, completion not recorded")
 			return False
-		
+
 		result = await collection.update_one(
 			{'workflow_id': workflow_id},
 			{
@@ -311,14 +311,14 @@ async def mark_workflow_completed(workflow_id: str) -> bool:
 				}
 			}
 		)
-		
+
 		if result.matched_count > 0:
 			logger.info(f"✅ Marked workflow as completed: workflow_id={workflow_id}")
 			return True
 		else:
 			logger.warning(f"Workflow state not found for completion: workflow_id={workflow_id}")
 			return False
-	
+
 	except Exception as e:
 		logger.error(f"Failed to mark workflow as completed: {e}")
 		return False
@@ -353,20 +353,20 @@ async def query_workflows_by_status(status: WorkflowStatus, limit: int = 100) ->
 	"""
 	try:
 		collection = await get_workflow_state_collection()
-		if not collection:
+		if collection is None:
 			logger.warning("MongoDB unavailable, cannot query workflows")
 			return []
-		
+
 		cursor = collection.find({'status': status.value}).sort('created_at', -1).limit(limit)
-		
+
 		workflows = []
 		async for state_dict in cursor:
 			state_dict.pop('_id', None)
 			workflows.append(WorkflowState(**state_dict))
-		
+
 		logger.debug(f"Queried {len(workflows)} workflows with status={status}")
 		return workflows
-	
+
 	except Exception as e:
 		logger.error(f"Failed to query workflows by status: {e}")
 		return []

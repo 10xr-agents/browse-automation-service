@@ -61,6 +61,32 @@ class ActionDefinition(BaseModel):
 	reversible_by: str | None = Field(None, description="Action that reverses this one")
 	metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
+	# Cross-reference fields (Phase 1: Schema Updates)
+	screen_ids: list[str] = Field(
+		default_factory=list,
+		description="Screen IDs where this action is available"
+	)
+	user_flow_ids: list[str] = Field(
+		default_factory=list,
+		description="User flow IDs that use this action"
+	)
+	task_ids: list[str] = Field(
+		default_factory=list,
+		description="Task IDs that require this action"
+	)
+	business_function_ids: list[str] = Field(
+		default_factory=list,
+		description="Business function IDs that use this action"
+	)
+	triggered_transitions: list[str] = Field(
+		default_factory=list,
+		description="Transition IDs that this action triggers"
+	)
+	workflow_ids: list[str] = Field(
+		default_factory=list,
+		description="Workflow IDs that include this action"
+	)
+
 
 # =============================================================================
 # Action Extraction Result
@@ -73,7 +99,7 @@ class ActionExtractionResult(BaseModel):
 	success: bool = Field(default=True, description="Whether extraction succeeded")
 	errors: list[dict[str, Any]] = Field(default_factory=list, description="Extraction errors")
 	statistics: dict[str, Any] = Field(default_factory=dict, description="Extraction statistics")
-	
+
 	def add_error(self, error_type: str, message: str, context: dict[str, Any] | None = None) -> None:
 		"""Add an error to the result."""
 		self.errors.append({
@@ -82,13 +108,13 @@ class ActionExtractionResult(BaseModel):
 			'context': context or {}
 		})
 		self.success = False
-	
+
 	def calculate_statistics(self) -> None:
 		"""Calculate extraction statistics."""
 		action_types = {}
 		for action in self.actions:
 			action_types[action.action_type] = action_types.get(action.action_type, 0) + 1
-		
+
 		self.statistics = {
 			'total_actions': len(self.actions),
 			'idempotent_actions': sum(1 for a in self.actions if a.idempotent),
@@ -114,7 +140,7 @@ class ActionExtractor:
 	- Idempotency detection
 	- Error handling extraction
 	"""
-	
+
 	def __init__(self, website_id: str = "unknown"):
 		"""
 		Initialize action extractor.
@@ -123,7 +149,7 @@ class ActionExtractor:
 			website_id: Website identifier for extracted actions
 		"""
 		self.website_id = website_id
-	
+
 	def extract_actions(self, content_chunks: list[ContentChunk]) -> ActionExtractionResult:
 		"""
 		Extract action definitions from content chunks.
@@ -135,17 +161,17 @@ class ActionExtractor:
 			ActionExtractionResult with extracted actions
 		"""
 		result = ActionExtractionResult()
-		
+
 		try:
 			logger.info(f"Extracting actions from {len(content_chunks)} content chunks")
-			
+
 			for chunk in content_chunks:
 				actions = self._extract_actions_from_chunk(chunk)
 				result.actions.extend(actions)
-			
+
 			# Deduplicate actions
 			result.actions = self._deduplicate_actions(result.actions)
-			
+
 			# Validate extracted actions
 			for action in result.actions:
 				validation_errors = self._validate_action(action)
@@ -155,25 +181,25 @@ class ActionExtractor:
 						f"Action '{action.action_id}' failed validation",
 						{"action_id": action.action_id, "errors": validation_errors}
 					)
-			
+
 			# Calculate statistics
 			result.calculate_statistics()
-			
+
 			logger.info(
 				f"✅ Extracted {result.statistics['total_actions']} actions "
 				f"({result.statistics['idempotent_actions']} idempotent)"
 			)
-		
+
 		except Exception as e:
 			logger.error(f"❌ Error extracting actions: {e}", exc_info=True)
 			result.add_error("ExtractionError", str(e), {"exception_type": type(e).__name__})
-		
+
 		return result
-	
+
 	def _extract_actions_from_chunk(self, chunk: ContentChunk) -> list[ActionDefinition]:
 		"""Extract actions from a single content chunk."""
 		actions = []
-		
+
 		# Action patterns: verb + target (greedy capture to get full target)
 		action_patterns = [
 			(r'click\s+(?:the\s+)?["\']?([^"\'\n\.]+?)["\']?\s+(?:button|link|to)', 'click'),
@@ -183,30 +209,30 @@ class ActionExtractor:
 			(r'scroll\s+(?:to\s+)?["\']?([^"\'\n\.]+)["\']?', 'scroll'),
 			(r'wait\s+for\s+["\']?([^"\'\n\.]+)["\']?', 'wait'),
 		]
-		
+
 		for pattern, action_type in action_patterns:
 			matches = re.finditer(pattern, chunk.content, re.IGNORECASE)
 			for match in matches:
 				target = match.group(1).strip()
-				
+
 				# Skip if target is too short or generic
 				if len(target) < 2 or target.lower() in ['the', 'a', 'an', 'it']:
 					continue
-				
+
 				action_id = self._generate_action_id(action_type, target)
-				
+
 				# Extract context
 				start = max(0, match.start() - 200)
 				end = min(len(chunk.content), match.end() + 500)
 				context = chunk.content[start:end]
-				
+
 				action = self._create_action_from_context(
 					action_id, action_type, target, context
 				)
 				actions.append(action)
-		
+
 		return actions
-	
+
 	def _create_action_from_context(
 		self,
 		action_id: str,
@@ -217,13 +243,13 @@ class ActionExtractor:
 		"""Create action definition from extracted context."""
 		# Determine idempotency
 		idempotent = self._is_idempotent(action_type, context)
-		
+
 		# Extract preconditions
 		preconditions = self._extract_preconditions(context)
-		
+
 		# Extract postconditions
 		postconditions = self._extract_postconditions(context)
-		
+
 		return ActionDefinition(
 			action_id=action_id,
 			name=f"{action_type.title()} {target}",
@@ -239,30 +265,30 @@ class ActionExtractor:
 				'target': target,
 			}
 		)
-	
+
 	def _is_idempotent(self, action_type: str, context: str) -> bool:
 		"""Determine if action is idempotent."""
 		# Non-idempotent keywords
 		non_idempotent_keywords = ['submit', 'create', 'delete', 'send', 'post']
-		
+
 		if action_type in ['submit', 'click']:
 			# Check context for non-idempotent indicators
 			context_lower = context.lower()
 			return not any(keyword in context_lower for keyword in non_idempotent_keywords)
-		
+
 		# Type, navigate, scroll are generally idempotent
 		return action_type in ['type', 'navigate', 'scroll', 'wait']
-	
+
 	def _extract_preconditions(self, context: str) -> list[ActionPrecondition]:
 		"""Extract preconditions from context."""
 		preconditions = []
-		
+
 		# Look for "must", "requires", "ensure"
 		precondition_patterns = [
 			r'(?:must|requires?|ensure)\s+(.+?)(?:\.|$)',
 			r'before\s+(.+?),\s+(?:you must|ensure)',
 		]
-		
+
 		for pattern in precondition_patterns:
 			matches = re.finditer(pattern, context, re.IGNORECASE)
 			for match in matches:
@@ -272,19 +298,19 @@ class ActionExtractor:
 					hard_dependency=True,
 					auto_remediate=False
 				))
-		
+
 		return preconditions
-	
+
 	def _extract_postconditions(self, context: str) -> list[ActionPostcondition]:
 		"""Extract postconditions from context."""
 		postconditions = []
-		
+
 		# Look for "after", "then", "results in"
 		postcondition_patterns = [
 			r'(?:after|then|results? in)\s+(.+?)(?:\.|$)',
 			r'(?:navigates? to|redirects? to)\s+(.+?)(?:\.|$)',
 		]
-		
+
 		for pattern in postcondition_patterns:
 			matches = re.finditer(pattern, context, re.IGNORECASE)
 			for match in matches:
@@ -293,9 +319,9 @@ class ActionExtractor:
 					type='custom',
 					success=True
 				))
-		
+
 		return postconditions
-	
+
 	def _categorize_action(self, action_type: str) -> str:
 		"""Categorize action."""
 		categories = {
@@ -307,7 +333,7 @@ class ActionExtractor:
 			'wait': 'timing',
 		}
 		return categories.get(action_type, 'interaction')
-	
+
 	def _generate_selector(self, target: str) -> str:
 		"""Generate CSS selector from target description."""
 		# Simple heuristic: convert to lowercase, make CSS-friendly
@@ -315,30 +341,30 @@ class ActionExtractor:
 		selector = re.sub(r'[^\w\s-]', '', selector)
 		selector = re.sub(r'[-\s]+', '-', selector)
 		return f".{selector}"
-	
+
 	def _generate_action_id(self, action_type: str, target: str) -> str:
 		"""Generate action ID."""
 		target_id = target.lower().strip()
 		target_id = re.sub(r'[^\w\s-]', '', target_id)
 		target_id = re.sub(r'[-\s]+', '_', target_id)
 		return f"{action_type}_{target_id}"
-	
+
 	def _deduplicate_actions(self, actions: list[ActionDefinition]) -> list[ActionDefinition]:
 		"""Deduplicate actions by action_id."""
 		seen = set()
 		unique = []
-		
+
 		for action in actions:
 			if action.action_id not in seen:
 				seen.add(action.action_id)
 				unique.append(action)
-		
+
 		return unique
-	
+
 	def _validate_action(self, action: ActionDefinition) -> list[str]:
 		"""Validate action definition against schema."""
 		errors = []
-		
+
 		# Validate required fields
 		if not action.action_id:
 			errors.append("Missing action_id")
@@ -346,7 +372,7 @@ class ActionExtractor:
 			errors.append("Missing name")
 		if not action.action_type:
 			errors.append("Missing action_type")
-		
+
 		# Validate action type
 		valid_action_types = [
 			'click', 'type', 'navigate', 'select_option', 'scroll',
@@ -354,7 +380,7 @@ class ActionExtractor:
 		]
 		if action.action_type not in valid_action_types:
 			errors.append(f"Invalid action type: {action.action_type}")
-		
+
 		return errors
 
 
@@ -370,9 +396,9 @@ def validate_action_definition(action: ActionDefinition) -> bool:
 	"""
 	extractor = ActionExtractor()
 	errors = extractor._validate_action(action)
-	
+
 	if errors:
 		logger.error(f"Action validation failed: {errors}")
 		return False
-	
+
 	return True

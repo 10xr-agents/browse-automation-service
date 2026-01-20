@@ -16,16 +16,16 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TemporalConfig:
 	"""Temporal connection configuration."""
-	
+
 	# Temporal server URL
 	url: str = "localhost:7233"
-	
+
 	# Namespace for workflows
 	namespace: str = "default"
-	
+
 	# Task queue for knowledge extraction workflows
 	knowledge_task_queue: str = "knowledge-extraction-queue"
-	
+
 	@classmethod
 	def from_env(cls) -> "TemporalConfig":
 		"""
@@ -55,9 +55,9 @@ async def get_temporal_client(config: TemporalConfig | None = None) -> Client:
 	"""
 	if config is None:
 		config = TemporalConfig.from_env()
-	
+
 	logger.info(f"Connecting to Temporal at {config.url} (namespace: {config.namespace})")
-	
+
 	try:
 		client = await Client.connect(
 			config.url,
@@ -66,5 +66,6 @@ async def get_temporal_client(config: TemporalConfig | None = None) -> Client:
 		logger.info("✅ Successfully connected to Temporal")
 		return client
 	except Exception as e:
-		logger.error(f"❌ Failed to connect to Temporal: {e}", exc_info=True)
+		# Don't log here - let the caller handle it gracefully
+		# This prevents duplicate log messages when Temporal is not available
 		raise

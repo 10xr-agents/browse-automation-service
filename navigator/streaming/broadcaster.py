@@ -37,11 +37,11 @@ class EventBroadcaster:
 		"""
 		self.redis_client = redis_client
 		self.use_websocket = use_websocket
-		
+
 		# Store WebSocket connections per room: room_name -> set of WebSocket connections
 		self.room_websockets: dict[str, set[WebSocket]] = {}
 		self._lock = asyncio.Lock()
-		
+
 		logger.debug(
 			f"EventBroadcaster initialized (redis: {'enabled' if redis_client else 'disabled'}, "
 			f"websocket: {'enabled' if use_websocket else 'disabled'})"

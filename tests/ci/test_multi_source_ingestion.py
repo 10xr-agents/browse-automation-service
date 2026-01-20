@@ -291,7 +291,8 @@ def test_2_4_video_ingester_initialization():
 	assert ingester.thumbnail_count == 5
 
 
-def test_2_4_video_format_support():
+@pytest.mark.asyncio
+async def test_2_4_video_format_support():
 	"""Test video format support."""
 	ingester = VideoIngester()
 	
@@ -301,7 +302,8 @@ def test_2_4_video_format_support():
 			temp_path = Path(f.name)
 		
 		try:
-			result = ingester.ingest_video(temp_path)
+			# ingest_video is now async, so await it
+			result = await ingester.ingest_video(temp_path)
 			
 			# Should fail gracefully for empty file
 			assert result.success is False

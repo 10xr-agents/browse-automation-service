@@ -30,7 +30,7 @@ async def create_command_consumer(
 	try:
 		from navigator.streaming.command_consumer import CommandConsumer
 		from navigator.streaming.redis_client import get_redis_streams_client
-		
+
 		# Generate instance ID if not provided
 		if not instance_id:
 			import socket
@@ -40,23 +40,23 @@ async def create_command_consumer(
 			except Exception:
 				from uuid import uuid4
 				instance_id = uuid4().hex[:8]
-		
+
 		# Get Redis client
 		redis_client = await get_redis_streams_client()
 		if not redis_client:
 			logger.debug("Redis streams client not available, CommandConsumer not created")
 			return None
-		
+
 		# Get components from session_manager
 		state_diff_engine = session_manager.get_state_diff_engine()
 		sequence_tracker = session_manager.get_sequence_tracker()
 		dedup_cache = session_manager.get_dedup_cache()
 		state_publisher = await session_manager.get_state_publisher()
-		
+
 		if not all([state_diff_engine, sequence_tracker, dedup_cache, state_publisher]):
 			logger.debug("Sequenced communication components not available, CommandConsumer not created")
 			return None
-		
+
 		# Create CommandConsumer
 		command_consumer = CommandConsumer(
 			redis_client=redis_client,
@@ -68,10 +68,10 @@ async def create_command_consumer(
 			state_publisher=state_publisher,
 			consumer_group=consumer_group,
 		)
-		
+
 		logger.info(f"CommandConsumer created for instance {instance_id}")
 		return command_consumer
-		
+
 	except ImportError as e:
 		logger.debug(f"CommandConsumer not available: {e}")
 		return None

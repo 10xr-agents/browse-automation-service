@@ -46,11 +46,11 @@ async def get_redis_streams_client() -> Any | None:
 		Redis async client instance or None if Redis not available
 	"""
 	global _redis_streams_client
-	
+
 	if _redis_streams_client is None:
 		try:
 			import redis.asyncio as redis
-			
+
 			redis_url = get_redis_url()
 			# Use decode_responses=False for manual encoding control
 			_redis_streams_client = redis.from_url(redis_url, decode_responses=False)
@@ -63,5 +63,5 @@ async def get_redis_streams_client() -> Any | None:
 		except Exception as e:
 			logger.warning(f"Redis streams client not available: {e}")
 			return None
-	
+
 	return _redis_streams_client

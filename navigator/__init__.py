@@ -6,6 +6,7 @@ This package contains the Navigator implementation of the Browser Automation Ser
 
 from navigator.action.command import (
 	ActionCommand,
+	ActionResult,
 	ActionType,
 	BrowserContext,
 	BrowserStateChange,
@@ -14,7 +15,6 @@ from navigator.action.command import (
 	ScrollActionCommand,
 	TypeActionCommand,
 	WaitActionCommand,
-	ActionResult,
 )
 from navigator.action.dispatcher import ActionDispatcher
 

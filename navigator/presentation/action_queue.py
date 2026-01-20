@@ -20,7 +20,7 @@ class ActionQueue:
 	Supports BullMQ for persistent queues (requires Redis) or in-memory queues for development.
 	Provides rate limiting and retry logic with exponential backoff.
 	"""
-	
+
 	def __init__(
 		self,
 		queue: Any | None = None,
@@ -44,7 +44,7 @@ class ActionQueue:
 		self.max_retries = max_retries
 		self.retry_backoff_base = retry_backoff_base
 		self.action_processor = action_processor
-		
+
 		# Rate limiting
 		if max_actions_per_second:
 			self._rate_limiter = asyncio.Semaphore(max_actions_per_second)
@@ -52,20 +52,20 @@ class ActionQueue:
 		else:
 			self._rate_limiter = None
 			self._min_delay = 0.0
-		
+
 		# In-memory queue (fallback)
 		self._in_memory_queue: list[dict[str, Any]] = []
 		self._in_memory_processing = False
 		self._failed_actions: dict[str, int] = {}  # job_id -> retry_count
-		
+
 		# Worker tracking (for BullMQ)
 		self._worker: Any | None = None
-		
+
 		logger.debug(
 			f"ActionQueue initialized (queue: {'BullMQ' if queue else 'in-memory'}, "
 			f"rate_limit: {max_actions_per_second}, max_retries: {max_retries})"
 		)
-	
+
 	async def enqueue_action(
 		self,
 		action: dict[str, Any],
@@ -87,19 +87,19 @@ class ActionQueue:
 		"""
 		if job_id is None:
 			job_id = f"action_{int(time.time() * 1000)}"
-		
+
 		if self.queue:
 			# Use BullMQ queue
 			try:
 				from bullmq.types import JobOptions
-				
+
 				opts = JobOptions(
 					removeOnComplete=True,
 					attempts=self.max_retries + 1,  # attempts includes initial try
 					priority=priority,
 					delay=int(delay * 1000) if delay > 0 else None,
 				)
-				
+
 				await self.queue.add(
 					"browser_action",
 					action,
@@ -111,7 +111,7 @@ class ActionQueue:
 			except ImportError:
 				logger.warning("BullMQ not available, falling back to in-memory queue")
 				# Fall through to in-memory queue
-		
+
 		# In-memory queue (fallback or no queue provided)
 		self._in_memory_queue.append({
 			"job_id": job_id,
@@ -122,7 +122,7 @@ class ActionQueue:
 		})
 		logger.debug(f"Enqueued action in-memory: {job_id}")
 		return job_id
-	
+
 	async def process_queue(self) -> list[dict[str, Any]]:
 		"""
 		Process queued actions.
@@ -137,16 +137,16 @@ class ActionQueue:
 			# BullMQ queue processing
 			try:
 				from bullmq import QueueWorker
-				
+
 				if self._worker is None:
 					# Create worker
 					async def processor(job: Any):
 						"""Process a job from the queue."""
 						action = job.data
 						job_id = job.id
-						
+
 						logger.debug(f"Processing action from BullMQ queue: {job_id}")
-						
+
 						# Apply rate limiting
 						if self._rate_limiter:
 							async with self._rate_limiter:
@@ -154,9 +154,9 @@ class ActionQueue:
 								result = await self._process_action(action, job_id)
 						else:
 							result = await self._process_action(action, job_id)
-						
+
 						return result
-					
+
 					self._worker = QueueWorker(
 						"browser_actions",
 						processor,
@@ -166,21 +166,21 @@ class ActionQueue:
 						}
 					)
 					logger.debug("Started BullMQ worker")
-				
+
 				# Worker is already running, return empty results (processing happens in background)
 				return []
 			except ImportError:
 				logger.warning("BullMQ not available, falling back to in-memory processing")
 				# Fall through to in-memory processing
-		
+
 		# In-memory queue processing
 		if self._in_memory_processing:
 			logger.debug("Queue processing already in progress")
 			return []
-		
+
 		self._in_memory_processing = True
 		results = []
-		
+
 		try:
 			# Sort by priority (higher first) and delay
 			sorted_queue = sorted(
@@ -188,16 +188,16 @@ class ActionQueue:
 				key=lambda x: (x["priority"], -x.get("enqueued_at", 0)),
 				reverse=True,
 			)
-			
+
 			for item in sorted_queue:
 				job_id = item["job_id"]
 				action = item["action"]
 				delay = item.get("delay", 0.0)
-				
+
 				# Apply delay if specified
 				if delay > 0:
 					await asyncio.sleep(delay)
-				
+
 				# Apply rate limiting
 				if self._rate_limiter:
 					async with self._rate_limiter:
@@ -205,17 +205,17 @@ class ActionQueue:
 						result = await self._process_action(action, job_id)
 				else:
 					result = await self._process_action(action, job_id)
-				
+
 				results.append(result)
-			
+
 			# Clear processed items
 			self._in_memory_queue = []
-			
+
 		finally:
 			self._in_memory_processing = False
-		
+
 		return results
-	
+
 	async def _process_action(self, action: dict[str, Any], job_id: str) -> dict[str, Any]:
 		"""
 		Process a single action with retry logic.
@@ -228,7 +228,7 @@ class ActionQueue:
 			Processing result
 		"""
 		retry_count = self._failed_actions.get(job_id, 0)
-		
+
 		try:
 			if self.action_processor:
 				result = await self.action_processor(action)
@@ -239,21 +239,21 @@ class ActionQueue:
 			else:
 				# No processor, just return success
 				return {"success": True, "job_id": job_id, "action": action}
-		
+
 		except Exception as e:
 			logger.error(f"Error processing action {job_id}: {e}", exc_info=True)
-			
+
 			# Check if we should retry
 			if retry_count < self.max_retries:
 				retry_count += 1
 				self._failed_actions[job_id] = retry_count
-				
+
 				# Calculate exponential backoff delay
 				backoff_delay = self.retry_backoff_base ** retry_count
-				
+
 				logger.debug(f"Retrying action {job_id} (attempt {retry_count}/{self.max_retries}) after {backoff_delay}s")
 				await asyncio.sleep(backoff_delay)
-				
+
 				# Retry the action
 				return await self._process_action(action, job_id)
 			else:
@@ -265,7 +265,7 @@ class ActionQueue:
 					"error": str(e),
 					"retries": retry_count,
 				}
-	
+
 	async def close(self) -> None:
 		"""Close the queue and stop processing."""
 		if self._worker:
@@ -275,5 +275,5 @@ class ActionQueue:
 			except Exception as e:
 				logger.error(f"Error closing BullMQ worker: {e}", exc_info=True)
 			self._worker = None
-		
+
 		logger.debug("ActionQueue closed")

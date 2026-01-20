@@ -5,13 +5,13 @@ Phase 8: End-to-End Validation utilities
 """
 
 from navigator.knowledge.validation.consistency import (
-	ConsistencyValidator,
 	ConsistencyReport,
+	ConsistencyValidator,
 	check_database_consistency,
 )
 from navigator.knowledge.validation.metrics import (
-	PipelineMetrics,
 	BenchmarkResults,
+	PipelineMetrics,
 	collect_pipeline_metrics,
 )
 

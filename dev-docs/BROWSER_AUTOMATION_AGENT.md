@@ -573,6 +573,33 @@ Execute any of 45+ browser actions.
 
 ---
 
+## Code Organization
+
+### Action Dispatcher Module Structure
+
+The `ActionDispatcher` has been modularized into focused handler modules:
+
+```
+navigator/action/dispatcher/
+├── __init__.py                          # Exports ActionDispatcher
+├── dispatcher.py                        # Main ActionDispatcher class (routing & orchestration)
+├── handlers/
+│   ├── navigation.py                    # Navigate, go_back, go_forward, refresh
+│   ├── interaction.py                  # Click, right_click, double_click, hover, drag_drop
+│   ├── input.py                        # Type, send_keys, text_input_action, type_slowly
+│   ├── scrolling.py                    # Scroll actions
+│   └── utility.py                      # Wait, screenshot
+└── utils.py                             # Shared utilities (JavaScript execution, element lookup)
+```
+
+**Benefits:**
+- Clear separation by action type
+- Easier to locate and modify specific action handlers
+- Better testability - handlers can be tested independently
+- All existing imports continue to work via `__init__.py` re-exports
+
+---
+
 ## Error Handling
 
 ### Common Error Scenarios

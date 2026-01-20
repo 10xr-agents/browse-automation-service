@@ -8,7 +8,6 @@ Resolves cross-references between screens, tasks, actions, and transitions:
 """
 
 import logging
-import re
 from difflib import SequenceMatcher
 from typing import Any
 from uuid import uuid4
@@ -62,20 +61,20 @@ class DanglingReference(BaseModel):
 class ReferenceResolutionResult(BaseModel):
 	"""Result of reference resolution."""
 	resolution_id: str = Field(default_factory=lambda: str(uuid4()), description="Resolution ID")
-	
+
 	# Resolution results
 	resolved: list[ResolvedReference] = Field(default_factory=list, description="Successfully resolved")
 	ambiguous: list[AmbiguousReference] = Field(default_factory=list, description="Ambiguous references")
 	dangling: list[DanglingReference] = Field(default_factory=list, description="Dangling references")
-	
+
 	# Metadata
 	success: bool = Field(default=True, description="Whether resolution succeeded")
 	statistics: dict[str, Any] = Field(default_factory=dict, description="Resolution statistics")
-	
+
 	def calculate_statistics(self) -> None:
 		"""Calculate resolution statistics."""
 		total = len(self.resolved) + len(self.ambiguous) + len(self.dangling)
-		
+
 		self.statistics = {
 			'total_references': total,
 			'resolved_count': len(self.resolved),
@@ -100,7 +99,7 @@ class ReferenceResolver:
 	- Fuzzy matching with confidence scores
 	- Context-aware disambiguation
 	"""
-	
+
 	def __init__(self, min_confidence: float = 0.7):
 		"""
 		Initialize reference resolver.
@@ -109,7 +108,7 @@ class ReferenceResolver:
 			min_confidence: Minimum confidence threshold for fuzzy matches
 		"""
 		self.min_confidence = min_confidence
-	
+
 	def resolve_references(
 		self,
 		screens: list[ScreenDefinition],
@@ -130,42 +129,42 @@ class ReferenceResolver:
 			ReferenceResolutionResult
 		"""
 		result = ReferenceResolutionResult()
-		
+
 		try:
 			logger.info("Resolving cross-references between entities")
-			
+
 			# Build entity index for lookups
 			entity_index = self._build_entity_index(screens, tasks, actions, transitions)
-			
+
 			# Resolve transition screen references
 			self._resolve_transition_screen_refs(transitions, entity_index, result)
-			
+
 			# Resolve task action references
 			self._resolve_task_action_refs(tasks, entity_index, result)
-			
+
 			# Resolve action element references (by selector)
 			self._resolve_action_element_refs(actions, screens, result)
-			
+
 			# Calculate statistics
 			result.calculate_statistics()
-			
+
 			logger.info(
 				f"✅ Resolved {result.statistics['resolved_count']}/{result.statistics['total_references']} "
 				f"references ({result.statistics['resolution_rate']:.1%})"
 			)
-			
+
 			if result.statistics['ambiguous_count'] > 0:
 				logger.warning(f"⚠️ {result.statistics['ambiguous_count']} ambiguous references need review")
-			
+
 			if result.statistics['dangling_count'] > 0:
 				logger.error(f"❌ {result.statistics['dangling_count']} dangling references found")
-		
+
 		except Exception as e:
 			logger.error(f"❌ Error resolving references: {e}", exc_info=True)
 			result.success = False
-		
+
 		return result
-	
+
 	def _build_entity_index(
 		self,
 		screens: list[ScreenDefinition],
@@ -175,7 +174,7 @@ class ReferenceResolver:
 	) -> dict[str, dict[str, Any]]:
 		"""Build index of all entities for quick lookup."""
 		index: dict[str, dict[str, Any]] = {}
-		
+
 		for screen in screens:
 			index[screen.screen_id] = {
 				'type': 'screen',
@@ -183,21 +182,21 @@ class ReferenceResolver:
 				'url_patterns': screen.url_patterns,
 				'entity': screen
 			}
-		
+
 		for task in tasks:
 			index[task.task_id] = {
 				'type': 'task',
 				'name': task.name,
 				'entity': task
 			}
-		
+
 		for action in actions:
 			index[action.action_id] = {
 				'type': 'action',
 				'name': action.name,
 				'entity': action
 			}
-		
+
 		for transition in transitions:
 			index[transition.transition_id] = {
 				'type': 'transition',
@@ -205,9 +204,9 @@ class ReferenceResolver:
 				'to_screen': transition.to_screen_id,
 				'entity': transition
 			}
-		
+
 		return index
-	
+
 	def _resolve_transition_screen_refs(
 		self,
 		transitions: list[TransitionDefinition],
@@ -224,7 +223,7 @@ class ReferenceResolver:
 				target_type='screen',
 				entity_index=entity_index
 			)
-			
+
 			if from_ref['status'] == 'resolved':
 				result.resolved.append(ResolvedReference(
 					reference_id=str(uuid4()),
@@ -250,7 +249,7 @@ class ReferenceResolver:
 					reference_text=transition.from_screen_id,
 					reason=from_ref['reason']
 				))
-			
+
 			# Resolve to_screen_id
 			to_ref = self._resolve_reference(
 				source_entity_id=transition.transition_id,
@@ -259,7 +258,7 @@ class ReferenceResolver:
 				target_type='screen',
 				entity_index=entity_index
 			)
-			
+
 			if to_ref['status'] == 'resolved':
 				result.resolved.append(ResolvedReference(
 					reference_id=str(uuid4()),
@@ -285,7 +284,7 @@ class ReferenceResolver:
 					reference_text=transition.to_screen_id,
 					reason=to_ref['reason']
 				))
-	
+
 	def _resolve_task_action_refs(
 		self,
 		tasks: list[TaskDefinition],
@@ -297,13 +296,13 @@ class ReferenceResolver:
 			for step in task.steps:
 				# Match step action type with actions
 				step_action_type = step.type
-				
+
 				# Find matching actions
 				matching_actions = [
 					entity_id for entity_id, entity_data in entity_index.items()
 					if entity_data['type'] == 'action' and entity_data['entity'].action_type == step_action_type
 				]
-				
+
 				if len(matching_actions) == 1:
 					# Exact match
 					result.resolved.append(ResolvedReference(
@@ -332,7 +331,7 @@ class ReferenceResolver:
 						reference_text=step_action_type,
 						reason=f"No action found with type '{step_action_type}'"
 					))
-	
+
 	def _resolve_action_element_refs(
 		self,
 		actions: list[ActionDefinition],
@@ -343,7 +342,7 @@ class ReferenceResolver:
 		for action in actions:
 			if not action.target_selector:
 				continue
-			
+
 			# Find UI elements with matching selectors
 			for screen in screens:
 				for element in screen.ui_elements:
@@ -354,7 +353,7 @@ class ReferenceResolver:
 							if strategy.type == "css" and strategy.css:
 								element_css = strategy.css
 								break
-					
+
 					if element_css and element_css == action.target_selector:
 						result.resolved.append(ResolvedReference(
 							reference_id=str(uuid4()),
@@ -365,7 +364,7 @@ class ReferenceResolver:
 							confidence=1.0,
 							resolution_method='selector_match'
 						))
-	
+
 	def _resolve_reference(
 		self,
 		source_entity_id: str,
@@ -388,7 +387,7 @@ class ReferenceResolver:
 				'confidence': 1.0,
 				'method': 'exact_id_match'
 			}
-		
+
 		# Try fuzzy name matching
 		candidates = []
 		for entity_id, entity_data in entity_index.items():
@@ -396,17 +395,17 @@ class ReferenceResolver:
 				# Calculate similarity
 				name = entity_data.get('name', '')
 				similarity = self._calculate_similarity(reference_text, name)
-				
+
 				if similarity >= self.min_confidence:
 					candidates.append({
 						'entity_id': entity_id,
 						'name': name,
 						'similarity': similarity
 					})
-		
+
 		# Sort by similarity
 		candidates.sort(key=lambda x: x['similarity'], reverse=True)
-		
+
 		if len(candidates) == 1:
 			return {
 				'status': 'resolved',
@@ -434,13 +433,13 @@ class ReferenceResolver:
 				'status': 'dangling',
 				'reason': f"No {target_type} entity found matching '{reference_text}'"
 			}
-	
+
 	def _calculate_similarity(self, text1: str, text2: str) -> float:
 		"""Calculate similarity between two strings (0-1)."""
 		# Normalize
 		t1 = text1.lower().strip()
 		t2 = text2.lower().strip()
-		
+
 		# Use SequenceMatcher
 		return SequenceMatcher(None, t1, t2).ratio()
 

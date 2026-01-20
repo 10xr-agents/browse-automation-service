@@ -25,7 +25,7 @@ class KnowledgeAPI:
 	- Site map generation
 	- Knowledge queries
 	"""
-	
+
 	def __init__(
 		self,
 		storage: KnowledgeStorage,
@@ -49,9 +49,9 @@ class KnowledgeAPI:
 			storage=storage,
 			vector_store=vector_store,
 		)
-		
+
 		logger.debug("KnowledgeAPI initialized")
-	
+
 	async def get_page(self, url: str) -> dict[str, Any]:
 		"""
 		Get a page by URL.
@@ -80,7 +80,7 @@ class KnowledgeAPI:
 				'success': False,
 				'error': str(e),
 			}
-	
+
 	async def search(self, query: str, top_k: int = 5) -> dict[str, Any]:
 		"""
 		Search for pages using semantic search.
@@ -98,9 +98,9 @@ class KnowledgeAPI:
 					'success': False,
 					'error': 'Pipeline not available for semantic search',
 				}
-			
+
 			results = await self.pipeline.search_similar(query, top_k=top_k)
-			
+
 			return {
 				'success': True,
 				'query': query,
@@ -113,7 +113,7 @@ class KnowledgeAPI:
 				'success': False,
 				'error': str(e),
 			}
-	
+
 	async def get_links(self, url: str, direction: str = 'from') -> dict[str, Any]:
 		"""
 		Get links for a page.
@@ -135,7 +135,7 @@ class KnowledgeAPI:
 					'success': False,
 					'error': f"Invalid direction: {direction} (must be 'from' or 'to')",
 				}
-			
+
 			return {
 				'success': True,
 				'url': url,
@@ -149,7 +149,7 @@ class KnowledgeAPI:
 				'success': False,
 				'error': str(e),
 			}
-	
+
 	async def get_semantic_sitemap(self) -> dict[str, Any]:
 		"""
 		Get semantic site map.
@@ -169,7 +169,7 @@ class KnowledgeAPI:
 				'success': False,
 				'error': str(e),
 			}
-	
+
 	async def get_functional_sitemap(self) -> dict[str, Any]:
 		"""
 		Get functional site map.
@@ -189,7 +189,7 @@ class KnowledgeAPI:
 				'success': False,
 				'error': str(e),
 			}
-	
+
 	async def query(self, query_type: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 		"""
 		Generic query interface for knowledge retrieval.
@@ -202,34 +202,34 @@ class KnowledgeAPI:
 			Query results dictionary
 		"""
 		params = params or {}
-		
+
 		try:
 			if query_type == 'page':
 				url = params.get('url', '')
 				if not url:
 					return {'success': False, 'error': 'url parameter required'}
 				return await self.get_page(url)
-			
+
 			elif query_type == 'search':
 				query = params.get('query', '')
 				top_k = params.get('top_k', 5)
 				if not query:
 					return {'success': False, 'error': 'query parameter required'}
 				return await self.search(query, top_k=top_k)
-			
+
 			elif query_type == 'links':
 				url = params.get('url', '')
 				direction = params.get('direction', 'from')
 				if not url:
 					return {'success': False, 'error': 'url parameter required'}
 				return await self.get_links(url, direction=direction)
-			
+
 			elif query_type == 'sitemap_semantic':
 				return await self.get_semantic_sitemap()
-			
+
 			elif query_type == 'sitemap_functional':
 				return await self.get_functional_sitemap()
-			
+
 			else:
 				return {
 					'success': False,

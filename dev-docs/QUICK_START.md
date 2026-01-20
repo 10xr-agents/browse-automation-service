@@ -145,7 +145,7 @@ Look for in server logs:
 ```
 ✅ Temporal worker started successfully
    Task queue: knowledge-extraction-queue
-   Workflows: ['KnowledgeExtractionWorkflow']
+   Workflows: ['KnowledgeExtractionWorkflowV2']
 ```
 
 ### Test Knowledge Extraction

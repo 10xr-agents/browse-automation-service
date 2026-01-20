@@ -23,7 +23,7 @@ class VectorStore:
 	- Embedding storage and retrieval
 	- Similarity search
 	"""
-	
+
 	def __init__(self, use_mongodb: bool = True):
 		"""
 		Initialize vector store.
@@ -33,17 +33,17 @@ class VectorStore:
 		"""
 		self.use_mongodb = use_mongodb
 		self.embedding_dimension = 128  # Default dimension (matches SemanticAnalyzer)
-		
+
 		if use_mongodb:
 			logger.info("VectorStore initialized with MongoDB")
 		else:
 			self._init_in_memory()
 			logger.debug("VectorStore initialized with in-memory storage")
-	
+
 	def _init_in_memory(self) -> None:
 		"""Initialize in-memory storage."""
 		self.embeddings: dict[str, dict[str, Any]] = {}  # id -> {embedding, metadata}
-	
+
 	def _cosine_similarity(self, vec1: list[float], vec2: list[float]) -> float:
 		"""
 		Calculate cosine similarity between two vectors.
@@ -57,16 +57,16 @@ class VectorStore:
 		"""
 		if len(vec1) != len(vec2):
 			return 0.0
-		
+
 		dot_product = sum(a * b for a, b in zip(vec1, vec2))
 		magnitude1 = sum(a * a for a in vec1) ** 0.5
 		magnitude2 = sum(b * b for b in vec2) ** 0.5
-		
+
 		if magnitude1 == 0.0 or magnitude2 == 0.0:
 			return 0.0
-		
+
 		return dot_product / (magnitude1 * magnitude2)
-	
+
 	async def store_embedding(self, id: str, embedding: list[float], metadata: dict[str, Any] | None = None) -> None:
 		"""
 		Store an embedding with metadata.
@@ -82,7 +82,7 @@ class VectorStore:
 			'embedding': embedding,
 			'metadata': metadata,
 		}
-		
+
 		if self.use_mongodb:
 			try:
 				collection = await get_collection('embeddings')
@@ -91,7 +91,7 @@ class VectorStore:
 					self.embeddings[id] = embedding_document
 					logger.debug(f"Stored embedding in-memory (MongoDB unavailable): {id}")
 					return
-				
+
 				# Upsert by id
 				await collection.update_one(
 					{'id': id},
@@ -107,7 +107,7 @@ class VectorStore:
 		else:
 			self.embeddings[id] = embedding_document
 			logger.debug(f"Stored embedding in-memory: {id}")
-	
+
 	async def search_similar(self, query_embedding: list[float], top_k: int = 5, metadata_filter: dict[str, Any] | None = None) -> list[dict[str, Any]]:
 		"""
 		Search for similar embeddings.
@@ -126,23 +126,23 @@ class VectorStore:
 				if collection is None:
 					# Fallback to in-memory search
 					return self._search_in_memory(query_embedding, top_k, metadata_filter)
-				
+
 				# Get all embeddings (for now - can be optimized with vector search indexes later)
 				cursor = collection.find(metadata_filter or {})
 				results = []
-				
+
 				async for doc in cursor:
 					embedding = doc.get('embedding', [])
 					if not embedding:
 						continue
-					
+
 					similarity = self._cosine_similarity(query_embedding, embedding)
 					results.append({
 						'id': doc.get('id'),
 						'score': similarity,
 						'metadata': doc.get('metadata', {}),
 					})
-				
+
 				# Sort by similarity (descending) and return top_k
 				results.sort(key=lambda x: x['score'], reverse=True)
 				return results[:top_k]
@@ -152,33 +152,33 @@ class VectorStore:
 				return self._search_in_memory(query_embedding, top_k, metadata_filter)
 		else:
 			return self._search_in_memory(query_embedding, top_k, metadata_filter)
-	
+
 	def _search_in_memory(self, query_embedding: list[float], top_k: int, metadata_filter: dict[str, Any] | None) -> list[dict[str, Any]]:
 		"""Search in-memory embeddings."""
 		results = []
-		
+
 		for id, data in self.embeddings.items():
 			# Apply metadata filter if provided
 			if metadata_filter:
 				metadata = data.get('metadata', {})
 				if not all(metadata.get(k) == v for k, v in metadata_filter.items()):
 					continue
-			
+
 			embedding = data.get('embedding', [])
 			if not embedding:
 				continue
-			
+
 			similarity = self._cosine_similarity(query_embedding, embedding)
 			results.append({
 				'id': id,
 				'score': similarity,
 				'metadata': data.get('metadata', {}),
 			})
-		
+
 		# Sort by similarity (descending) and return top_k
 		results.sort(key=lambda x: x['score'], reverse=True)
 		return results[:top_k]
-	
+
 	async def get_embedding(self, id: str) -> dict[str, Any] | None:
 		"""
 		Get an embedding by ID.
@@ -195,7 +195,7 @@ class VectorStore:
 				if collection is None:
 					# Fallback to in-memory
 					return self.embeddings.get(id)
-				
+
 				doc = await collection.find_one({'id': id})
 				if doc:
 					doc.pop('_id', None)  # Remove MongoDB _id
@@ -207,7 +207,7 @@ class VectorStore:
 				return self.embeddings.get(id)
 		else:
 			return self.embeddings.get(id)
-	
+
 	async def update_embedding(self, id: str, embedding: list[float] | None = None, metadata: dict[str, Any] | None = None) -> None:
 		"""
 		Update an existing embedding.
@@ -222,10 +222,10 @@ class VectorStore:
 			update_data['embedding'] = embedding
 		if metadata is not None:
 			update_data['metadata'] = metadata
-		
+
 		if not update_data:
 			return
-		
+
 		if self.use_mongodb:
 			try:
 				collection = await get_collection('embeddings')
@@ -238,7 +238,7 @@ class VectorStore:
 							self.embeddings[id]['metadata'] = metadata
 					logger.debug(f"Updated embedding in-memory (MongoDB unavailable): {id}")
 					return
-				
+
 				await collection.update_one(
 					{'id': id},
 					{'$set': update_data}
@@ -260,7 +260,7 @@ class VectorStore:
 				if metadata is not None:
 					self.embeddings[id]['metadata'] = metadata
 			logger.debug(f"Updated embedding in-memory: {id}")
-	
+
 	async def delete_embedding(self, id: str) -> None:
 		"""
 		Delete an embedding.
@@ -276,7 +276,7 @@ class VectorStore:
 					self.embeddings.pop(id, None)
 					logger.debug(f"Deleted embedding from in-memory (MongoDB unavailable): {id}")
 					return
-				
+
 				await collection.delete_one({'id': id})
 				logger.debug(f"Deleted embedding from MongoDB: {id}")
 			except Exception as e:
@@ -287,7 +287,7 @@ class VectorStore:
 		else:
 			self.embeddings.pop(id, None)
 			logger.debug(f"Deleted embedding from in-memory: {id}")
-	
+
 	async def clear(self) -> None:
 		"""
 		Clear all embeddings (for testing).
@@ -300,7 +300,7 @@ class VectorStore:
 				logger.debug("Cleared MongoDB embeddings collection")
 			except Exception as e:
 				logger.error(f"Failed to clear MongoDB embeddings: {e}")
-		
+
 		# Also clear in-memory storage
 		self.embeddings.clear()
 		logger.debug("Cleared in-memory embeddings")

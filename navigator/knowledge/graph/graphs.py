@@ -10,8 +10,8 @@ from typing import Any
 from navigator.knowledge.graph.collections import (
 	GLOBAL_RECOVERY_COLLECTION,
 	GROUP_MEMBERSHIP_COLLECTION,
-	SCREENS_COLLECTION,
 	SCREEN_GROUPS_COLLECTION,
+	SCREENS_COLLECTION,
 	TRANSITIONS_COLLECTION,
 )
 from navigator.knowledge.graph.config import get_graph_database
@@ -37,11 +37,11 @@ async def create_all_graphs() -> bool:
 	"""
 	try:
 		logger.info("Creating ArangoDB graphs for knowledge graph...")
-		
+
 		db = await get_graph_database()
 		if db is None:
 			return False
-		
+
 		# Create navigation graph
 		if not db.has_graph(NAVIGATION_GRAPH):
 			edge_definitions = [
@@ -55,7 +55,7 @@ async def create_all_graphs() -> bool:
 			logger.info(f"✅ Created navigation graph: {NAVIGATION_GRAPH}")
 		else:
 			logger.info(f"   Navigation graph exists: {NAVIGATION_GRAPH}")
-		
+
 		# Create recovery graph
 		if not db.has_graph(RECOVERY_GRAPH):
 			edge_definitions = [
@@ -74,10 +74,10 @@ async def create_all_graphs() -> bool:
 			logger.info(f"✅ Created recovery graph: {RECOVERY_GRAPH}")
 		else:
 			logger.info(f"   Recovery graph exists: {RECOVERY_GRAPH}")
-		
+
 		logger.info("🎉 All graphs created successfully!")
 		return True
-		
+
 	except Exception as e:
 		logger.error(f"❌ Failed to create graphs: {e}", exc_info=True)
 		return False
@@ -94,9 +94,9 @@ async def get_navigation_graph() -> Any | None:
 		db = await get_graph_database()
 		if db is None:
 			return None
-		
+
 		return db.graph(NAVIGATION_GRAPH)
-		
+
 	except Exception as e:
 		logger.error(f"Failed to get navigation graph: {e}")
 		return None
@@ -113,9 +113,9 @@ async def get_recovery_graph() -> Any | None:
 		db = await get_graph_database()
 		if db is None:
 			return None
-		
+
 		return db.graph(RECOVERY_GRAPH)
-		
+
 	except Exception as e:
 		logger.error(f"Failed to get recovery graph: {e}")
 		return None
@@ -143,10 +143,10 @@ async def traverse_navigation_graph(
 		graph = await get_navigation_graph()
 		if graph is None:
 			return []
-		
+
 		# Build start vertex ID
 		start_vertex = f"{SCREENS_COLLECTION}/{start_screen_id}"
-		
+
 		# Perform traversal
 		results = graph.traverse(
 			start_vertex=start_vertex,
@@ -154,9 +154,9 @@ async def traverse_navigation_graph(
 			min_depth=min_depth,
 			max_depth=max_depth,
 		)
-		
+
 		return results.get('vertices', [])
-		
+
 	except Exception as e:
 		logger.error(f"Failed to traverse navigation graph: {e}")
 		return []
@@ -176,7 +176,7 @@ async def find_recovery_paths(screen_id: str) -> list[dict]:
 		db = await get_graph_database()
 		if db is None:
 			return []
-		
+
 		# Query: screen → group → recovery screens
 		aql = """
 		FOR screen IN screens
@@ -190,10 +190,10 @@ async def find_recovery_paths(screen_id: str) -> list[dict]:
 		                reliability: recovery.reliability
 		            }
 		"""
-		
+
 		cursor = db.aql.execute(aql, bind_vars={'screen_id': screen_id})
 		return list(cursor)
-		
+
 	except Exception as e:
 		logger.error(f"Failed to find recovery paths: {e}")
 		return []

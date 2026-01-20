@@ -5,9 +5,12 @@ Provides WebSocket endpoints for voice agent to connect and receive browser even
 """
 
 import logging
+from typing import Any
 
 try:
-	from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+	from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, status
+	from fastapi.exceptions import RequestValidationError
+	from fastapi.middleware.cors import CORSMiddleware
 	from fastapi.responses import JSONResponse
 
 	FASTAPI_AVAILABLE = True
@@ -43,9 +46,136 @@ def get_app() -> FastAPI:
 	return _app
 
 
+def create_app_with_lifespan(lifespan) -> FastAPI:
+	"""
+	Create FastAPI app with custom lifespan context manager.
+	
+	This is used by start_server.py to inject Temporal worker startup/shutdown logic.
+	
+	Args:
+		lifespan: AsyncContextManager for app lifespan (startup/shutdown)
+	
+	Returns:
+		FastAPI app instance
+	"""
+	global _app
+	if not FASTAPI_AVAILABLE:
+		raise ImportError('FastAPI not installed. Install with: pip install fastapi websockets')
+
+	_app = FastAPI(
+		title='Browser Automation Service API',
+		description=(
+			'**Knowledge Extraction & Browser Automation API**\n\n'
+			'Extract knowledge from websites, documentation, and videos, '
+			'then query the resulting knowledge graph for navigation paths, screens, tasks, and actions.\n\n'
+			'## Features\n\n'
+			'- 🌐 **Multi-Source Ingestion**: Extract from websites, docs, videos\n'
+			'- 📊 **Knowledge Graph**: Query navigation paths and relationships\n'
+			'- 🔄 **Workflow Tracking**: Real-time progress monitoring\n'
+			'- 🤖 **Browser Automation**: WebSocket-based event streaming\n'
+			'- ⚡ **Temporal Workflows**: Durable, fault-tolerant execution\n\n'
+			'## Getting Started\n\n'
+			'1. Start knowledge extraction: `POST /api/knowledge/ingest/start`\n'
+			'2. Track progress: `GET /api/knowledge/workflows/status/{job_id}`\n'
+			'3. Query knowledge: `POST /api/knowledge/graph/query`\n\n'
+			'For complete documentation, see `/docs` (Swagger UI) or `/redoc` (ReDoc).'
+		),
+		version='1.0.1',
+		contact={
+			'name': 'Browser Automation Service Team',
+			'email': 'support@yourservice.com',
+		},
+		license_info={
+			'name': 'MIT',
+			'url': 'https://opensource.org/licenses/MIT',
+		},
+		tags_metadata=[
+			{
+				'name': 'Knowledge Extraction',
+				'description': (
+					'Knowledge extraction and retrieval endpoints. '
+					'Start ingestion workflows, track progress, query the knowledge graph, '
+					'and retrieve detailed definitions of screens, tasks, actions, and transitions.'
+				),
+			},
+			{
+				'name': 'Health',
+				'description': 'Service health and status monitoring endpoints.',
+			},
+		],
+		lifespan=lifespan,
+		docs_url='/docs',  # Swagger UI endpoint
+		redoc_url='/redoc',  # ReDoc endpoint
+		openapi_url='/openapi.json',  # OpenAPI schema endpoint
+		swagger_ui_parameters={
+			'defaultModelsExpandDepth': -1,  # Don't expand models by default
+			'docExpansion': 'none',  # Don't expand operations by default
+			'filter': True,  # Enable search filter
+			'showCommonExtensions': True,  # Show common extensions
+			'tryItOutEnabled': True,  # Enable "Try it out" by default
+		},
+	)
+
+	# Add CORS middleware to handle OPTIONS preflight requests
+	_app.add_middleware(
+		CORSMiddleware,
+		allow_origins=["*"],  # Allow all origins (can be restricted in production)
+		allow_credentials=True,
+		allow_methods=["*"],  # Allow all HTTP methods
+		allow_headers=["*"],  # Allow all headers
+	)
+
+	# Add exception handler for validation errors to log them
+	@_app.exception_handler(RequestValidationError)
+	async def validation_exception_handler(request: Request, exc: RequestValidationError):
+		"""Log validation errors for debugging."""
+		errors = exc.errors()
+		error_details = []
+		for error in errors:
+			field_path = '.'.join(str(loc) for loc in error['loc'])
+			error_details.append(f"{field_path}: {error['msg']} (type: {error['type']})")
+
+		# Try to get request body (may be consumed already)
+		body_str = "N/A"
+		try:
+			body_bytes = await request.body()
+			if body_bytes:
+				import json
+				body_str = json.loads(body_bytes.decode('utf-8'))
+		except Exception:
+			pass
+
+		logger.warning(
+			f"❌ Validation error on {request.method} {request.url.path}: "
+			f"{'; '.join(error_details)}"
+		)
+		logger.warning(f"   Request body: {body_str}")
+
+		# Check if it's the old format being sent
+		if isinstance(body_str, dict):
+			if 'source_type' in body_str or 'source_url' in body_str:
+				logger.warning(
+					"   ⚠️  Client is using OLD API format. New format requires:\n"
+					"      - website_url (required): Target website for Phase 2 DOM analysis\n"
+					"      - s3_references + file_metadata_list OR documentation_urls (at least one required)\n"
+					"      - credentials (optional): For authenticated login"
+				)
+
+		return JSONResponse(
+			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			content={
+				"detail": errors,
+				"message": f"Validation failed: {'; '.join(error_details)}"
+			}
+		)
+
+	_setup_routes(_app)
+	return _app
+
+
 def _setup_routes(app: FastAPI) -> None:
 	"""Setup WebSocket routes."""
-	
+
 	# Setup knowledge retrieval REST API
 	_setup_knowledge_api(app)
 
@@ -59,7 +189,7 @@ def _setup_routes(app: FastAPI) -> None:
 		"""
 		logger.info(f'[WebSocket] New connection attempt for room: {room_name}')
 		logger.debug(f'[WebSocket] Client: {websocket.client if hasattr(websocket, "client") else "unknown"}')
-		
+
 		await event_broadcaster.register_websocket(websocket, room_name)
 		logger.debug(f'[WebSocket] ✅ Connection registered for room: {room_name}')
 
@@ -79,37 +209,43 @@ def _setup_routes(app: FastAPI) -> None:
 			logger.debug(f'[WebSocket] Cleaning up connection for room: {room_name}')
 			await event_broadcaster.unregister_websocket(websocket, room_name)
 
-	@app.get('/health')
+	@app.get(
+		'/health',
+		tags=['Health'],
+		summary='Health Check',
+		description='Check if the service is running and healthy.',
+		response_description='Service health status',
+	)
 	async def health_check():
 		"""Health check endpoint."""
 		response = {
 			'status': 'ok',
 			'service': 'browser-automation-websocket',
 		}
-		
+
 		return JSONResponse(response)
-	
+
 	@app.get('/api/knowledge/worker/status')
 	async def get_worker_status():
 		"""Get worker status and job information."""
 		try:
 			from navigator.knowledge.job_registry import get_job_registry
-			
+
 			# Count jobs by status
 			job_registry = await get_job_registry()
 			all_jobs = await job_registry.list_jobs()
-			
+
 			status_counts = {}
 			for job in all_jobs:
 				status = job.get('status', 'unknown')
 				status_counts[status] = status_counts.get(status, 0) + 1
-			
+
 			response = {
 				'worker_type': 'in_memory',
 				'job_counts': status_counts,
 				'total_jobs': len(all_jobs),
 			}
-			
+
 			return JSONResponse(response)
 		except Exception as e:
 			logger.error(f"Error getting worker status: {e}", exc_info=True)
@@ -123,7 +259,7 @@ def _setup_routes(app: FastAPI) -> None:
 		"""Get number of WebSocket connections for a room."""
 		count = event_broadcaster.get_connection_count(room_name)
 		return JSONResponse({'room_name': room_name, 'connection_count': count})
-	
+
 	@app.websocket('/api/knowledge/explore/ws/{job_id}')
 	async def knowledge_exploration_websocket(websocket: WebSocket, job_id: str):
 		"""WebSocket endpoint for real-time knowledge retrieval progress updates.
@@ -133,14 +269,16 @@ def _setup_routes(app: FastAPI) -> None:
 			job_id: Knowledge retrieval job ID
 		"""
 		logger.info(f'[WebSocket] New knowledge exploration connection for job: {job_id}')
-		
+
 		await websocket.accept()
-		
+
 		try:
 			# Import here to avoid circular dependencies
 			from navigator.knowledge.job_registry import get_job_registry
-			from navigator.knowledge.progress_observer import WebSocketProgressObserver, CompositeProgressObserver, LoggingProgressObserver
-			
+			from navigator.knowledge.progress_observer import (
+				CompositeProgressObserver,
+			)
+
 			# Check if job exists
 			job_registry = await get_job_registry()
 			job = await job_registry.get_job(job_id)
@@ -151,13 +289,13 @@ def _setup_routes(app: FastAPI) -> None:
 				})
 				await websocket.close()
 				return
-			
+
 			# Create WebSocket progress observer for this connection
 			class JobWebSocketObserver:
 				"""WebSocket observer for a specific job."""
 				def __init__(self, websocket: WebSocket):
 					self.websocket = websocket
-				
+
 				async def on_progress(self, progress):
 					"""Send progress update via WebSocket."""
 					try:
@@ -167,7 +305,7 @@ def _setup_routes(app: FastAPI) -> None:
 						})
 					except Exception as e:
 						logger.error(f"Error sending progress via WebSocket: {e}")
-				
+
 				async def on_page_completed(self, url: str, result: dict[str, Any]):
 					"""Send page completion via WebSocket."""
 					try:
@@ -177,7 +315,7 @@ def _setup_routes(app: FastAPI) -> None:
 						})
 					except Exception as e:
 						logger.error(f"Error sending page completion via WebSocket: {e}")
-				
+
 				async def on_external_link_detected(self, from_url: str, to_url: str):
 					"""Send external link detection via WebSocket."""
 					try:
@@ -187,7 +325,7 @@ def _setup_routes(app: FastAPI) -> None:
 						})
 					except Exception as e:
 						logger.error(f"Error sending external link detection via WebSocket: {e}")
-				
+
 				async def on_error(self, url: str, error: str):
 					"""Send error via WebSocket."""
 					try:
@@ -197,9 +335,9 @@ def _setup_routes(app: FastAPI) -> None:
 						})
 					except Exception as e:
 						logger.error(f"Error sending error via WebSocket: {e}")
-			
+
 			ws_observer = JobWebSocketObserver(websocket)
-			
+
 			# Add observer to pipeline if it exists
 			pipeline = job.get('pipeline')
 			if pipeline and hasattr(pipeline, 'progress_observer'):
@@ -213,14 +351,14 @@ def _setup_routes(app: FastAPI) -> None:
 						existing_observer,
 						ws_observer,
 					])
-			
+
 			# Send initial status
 			await websocket.send_json({
 				'type': 'connected',
 				'job_id': job_id,
 				'status': job.get('status', 'unknown'),
 			})
-			
+
 			# Keep connection alive and listen for messages
 			while True:
 				try:
@@ -258,26 +396,26 @@ def _setup_routes(app: FastAPI) -> None:
 				{'error': 'Invalid JSON in request body'},
 				status_code=400
 			)
-		
+
 		logger.info(f'[HTTP] MCP tool call received: {request_data.get("tool")}')
 		logger.debug(f'[HTTP] Tool call arguments: {request_data.get("arguments")}')
-		
+
 		try:
 			tool_name = request_data.get('tool')
 			arguments = request_data.get('arguments', {})
-			
+
 			if not tool_name:
 				return JSONResponse(
 					{'error': 'tool name is required'},
 					status_code=400
 				)
-			
+
 			# Import here to avoid circular dependencies
 			from navigator.server.mcp import BrowserAutomationMCPServer
-			
+
 			# Create MCP server instance (reuse session manager)
 			mcp_server = BrowserAutomationMCPServer(session_manager=session_manager)
-			
+
 			# Route to appropriate handler
 			if tool_name == 'start_browser_session':
 				result = await mcp_server._start_browser_session(arguments)
@@ -317,22 +455,22 @@ def _setup_routes(app: FastAPI) -> None:
 					{'error': f'Unknown tool: {tool_name}'},
 					status_code=404
 				)
-			
+
 			logger.info(f'[HTTP] ✅ Tool {tool_name} completed successfully')
 			return JSONResponse(result)
-			
+
 		except Exception as e:
 			logger.error(f'[HTTP] ❌ Tool call failed: {e}', exc_info=True)
 			return JSONResponse(
 				{'error': str(e)},
 				status_code=500
 			)
-	
+
 	@app.get('/mcp/tools')
 	async def list_mcp_tools():
 		"""List all available MCP tools."""
 		logger.debug('[HTTP] Listing MCP tools')
-		
+
 		tools = [
 			{
 				'name': 'start_browser_session',
@@ -399,15 +537,15 @@ def _setup_routes(app: FastAPI) -> None:
 				'description': 'Query stored knowledge (pages, semantic search, links, sitemaps)'
 			}
 		]
-		
+
 		return JSONResponse({'tools': tools})
 
 
 def _setup_knowledge_api(app: FastAPI) -> None:
-	"""Setup knowledge extraction REST API routes (Phase 6)."""
+	"""Setup knowledge extraction REST API routes."""
 	try:
-		from navigator.knowledge.api_v2 import create_knowledge_api_router
-		
+		from navigator.knowledge.rest_api import create_knowledge_api_router
+
 		router = create_knowledge_api_router()
 		if router:
 			app.include_router(router)

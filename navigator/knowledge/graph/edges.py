@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 class TransitionEdge(BaseModel):
-	"""Transition edge for ArangoDB."""
+	"""Transition edge schema (deprecated - all knowledge stored in MongoDB)."""
 	model_config = {'populate_by_name': True}
-	
+
 	key: str | None = Field(None, alias="_key", description="Edge key (auto-generated if None)")
 	from_: str = Field(..., alias="_from", description="Source node ID (screens/{screen_id})")
 	to: str = Field(..., alias="_to", description="Target node ID (screens/{screen_id})")
@@ -58,7 +58,7 @@ class EdgeCreationResult(BaseModel):
 	edges_updated: int = Field(default=0, description="Number of edges updated")
 	errors: list[dict[str, Any]] = Field(default_factory=list, description="Errors encountered")
 	edge_ids: list[str] = Field(default_factory=list, description="Created/updated edge IDs")
-	
+
 	def add_error(self, error_type: str, message: str, context: dict[str, Any] | None = None) -> None:
 		"""Add an error to the result."""
 		self.errors.append({
@@ -86,19 +86,19 @@ async def create_transition_edge(transition: TransitionDefinition) -> str | None
 		collection = await get_transition_collection()
 		if collection is None:
 			return None
-		
+
 		# Validate source and target nodes exist
 		from_node = await get_screen_node(transition.from_screen_id)
 		to_node = await get_screen_node(transition.to_screen_id)
-		
+
 		if not from_node:
 			logger.error(f"Source screen not found: {transition.from_screen_id}")
 			return None
-		
+
 		if not to_node:
 			logger.error(f"Target screen not found: {transition.to_screen_id}")
 			return None
-		
+
 		# Create edge
 		edge = TransitionEdge(
 			from_=f"{SCREENS_COLLECTION}/{transition.from_screen_id}",
@@ -113,16 +113,16 @@ async def create_transition_edge(transition: TransitionDefinition) -> str | None
 			cost=transition.cost,
 			reliability=transition.reliability_score,
 		)
-		
+
 		# Insert edge
 		edge_dict = edge.dict(by_alias=True, exclude_none=True)
 		result = collection.insert(edge_dict)
-		
+
 		edge_id = f"{TRANSITIONS_COLLECTION}/{result['_key']}"
 		logger.debug(f"Created transition edge: {edge_id}")
-		
+
 		return edge_id
-		
+
 	except Exception as e:
 		logger.error(f"Failed to create transition edge: {e}")
 		return None
@@ -139,31 +139,31 @@ async def create_transition_edges(transitions: list[TransitionDefinition]) -> Ed
 		EdgeCreationResult with statistics
 	"""
 	result = EdgeCreationResult()
-	
+
 	try:
 		logger.info(f"Creating transition edges for {len(transitions)} transitions...")
-		
+
 		for transition in transitions:
 			try:
 				edge_id = await create_transition_edge(transition)
-				
+
 				if edge_id:
 					result.edge_ids.append(edge_id)
 					result.edges_created += 1
-				
+
 			except Exception as e:
 				result.add_error(
 					"EdgeCreationError",
 					f"Failed to create edge for transition '{transition.transition_id}': {e}",
 					{'transition_id': transition.transition_id}
 				)
-		
+
 		logger.info(f"✅ Created {result.edges_created} transition edges")
-		
+
 	except Exception as e:
 		logger.error(f"❌ Failed to create transition edges: {e}", exc_info=True)
 		result.add_error("BatchCreationError", str(e))
-	
+
 	return result
 
 
@@ -182,39 +182,39 @@ async def create_membership_edges(
 		EdgeCreationResult with statistics
 	"""
 	result = EdgeCreationResult()
-	
+
 	try:
 		collection = await get_group_membership_collection()
 		if collection is None:
 			result.add_error("CollectionError", "Failed to get membership collection")
 			return result
-		
+
 		logger.info(f"Creating membership edges: {len(screen_ids)} screens → group {group_id}")
-		
+
 		for screen_id in screen_ids:
 			try:
 				edge = {
 					'_from': f"{SCREENS_COLLECTION}/{screen_id}",
 					'_to': f"screen_groups/{group_id}",
 				}
-				
+
 				edge_result = collection.insert(edge)
 				result.edge_ids.append(f"{GROUP_MEMBERSHIP_COLLECTION}/{edge_result['_key']}")
 				result.edges_created += 1
-				
+
 			except Exception as e:
 				result.add_error(
 					"MembershipError",
 					f"Failed to create membership edge for screen '{screen_id}': {e}",
 					{'screen_id': screen_id, 'group_id': group_id}
 				)
-		
+
 		logger.info(f"✅ Created {result.edges_created} membership edges")
-		
+
 	except Exception as e:
 		logger.error(f"❌ Failed to create membership edges: {e}", exc_info=True)
 		result.add_error("BatchCreationError", str(e))
-	
+
 	return result
 
 
@@ -238,21 +238,21 @@ async def create_recovery_edges(
 		EdgeCreationResult with statistics
 	"""
 	result = EdgeCreationResult()
-	
+
 	try:
 		collection = await get_global_recovery_collection()
 		if collection is None:
 			result.add_error("CollectionError", "Failed to get recovery collection")
 			return result
-		
+
 		logger.info(f"Creating recovery edges: group {group_id} → {len(recovery_screens)} recovery screens")
-		
+
 		for recovery in recovery_screens:
 			try:
 				screen_id = recovery['screen_id']
 				priority = recovery.get('priority', 1)
 				reliability = recovery.get('reliability', 1.0)
-				
+
 				edge = {
 					'_from': f"screen_groups/{group_id}",
 					'_to': f"{SCREENS_COLLECTION}/{screen_id}",
@@ -260,24 +260,24 @@ async def create_recovery_edges(
 					'reliability': reliability,  # Agent-Killer #4
 					'recovery_type': 'dashboard' if priority == 1 else 'back_button',
 				}
-				
+
 				edge_result = collection.insert(edge)
 				result.edge_ids.append(f"{GLOBAL_RECOVERY_COLLECTION}/{edge_result['_key']}")
 				result.edges_created += 1
-				
+
 			except Exception as e:
 				result.add_error(
 					"RecoveryError",
 					f"Failed to create recovery edge for screen '{screen_id}': {e}",
 					{'screen_id': screen_id, 'group_id': group_id}
 				)
-		
+
 		logger.info(f"✅ Created {result.edges_created} recovery edges")
-		
+
 	except Exception as e:
 		logger.error(f"❌ Failed to create recovery edges: {e}", exc_info=True)
 		result.add_error("BatchCreationError", str(e))
-	
+
 	return result
 
 
@@ -295,14 +295,14 @@ async def count_transition_edges(from_screen_id: str | None = None) -> int:
 		collection = await get_transition_collection()
 		if collection is None:
 			return 0
-		
+
 		if from_screen_id:
 			# Count with filter
 			from navigator.knowledge.graph.config import get_graph_database
 			db = await get_graph_database()
 			if db is None:
 				return 0
-			
+
 			aql = """
 			FOR edge IN transitions
 			    FILTER edge._from == @from_screen
@@ -315,7 +315,7 @@ async def count_transition_edges(from_screen_id: str | None = None) -> int:
 		else:
 			# Count all
 			return collection.count()
-		
+
 	except Exception as e:
 		logger.error(f"Failed to count transition edges: {e}")
 		return 0

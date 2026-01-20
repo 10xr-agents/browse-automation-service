@@ -23,7 +23,7 @@ class KnowledgeStorage:
 	- Page storage (content, metadata, embeddings)
 	- Link storage (links, relationships)
 	"""
-	
+
 	def __init__(self, use_mongodb: bool = True):
 		"""
 		Initialize knowledge storage.
@@ -32,19 +32,19 @@ class KnowledgeStorage:
 			use_mongodb: Whether to use MongoDB (True by default, falls back to in-memory if unavailable)
 		"""
 		self.use_mongodb = use_mongodb
-		
+
 		if use_mongodb:
 			# MongoDB connection will be tested on first use (async)
 			logger.info("KnowledgeStorage initialized (will use MongoDB if available)")
 		else:
 			self._init_in_memory()
 			logger.debug("KnowledgeStorage initialized with in-memory storage")
-	
+
 	def _init_in_memory(self) -> None:
 		"""Initialize in-memory storage."""
 		self.pages: dict[str, dict[str, Any]] = {}  # url -> page_data
 		self.links: list[dict[str, Any]] = []  # List of link records
-	
+
 	async def store_page(self, url: str, page_data: dict[str, Any]) -> None:
 		"""
 		Store a page (content, metadata, embeddings).
@@ -57,7 +57,7 @@ class KnowledgeStorage:
 			'url': url,
 			**page_data,
 		}
-		
+
 		if self.use_mongodb:
 			try:
 				collection = await get_collection('pages')
@@ -66,7 +66,7 @@ class KnowledgeStorage:
 					self.pages[url] = page_document
 					logger.debug(f"Stored page in-memory (MongoDB unavailable): {url}")
 					return
-				
+
 				# Upsert by URL
 				await collection.update_one(
 					{'url': url},
@@ -82,7 +82,7 @@ class KnowledgeStorage:
 		else:
 			self.pages[url] = page_document
 			logger.debug(f"Stored page in-memory: {url}")
-	
+
 	async def get_page(self, url: str) -> dict[str, Any] | None:
 		"""
 		Get a stored page.
@@ -99,7 +99,7 @@ class KnowledgeStorage:
 				if collection is None:
 					# Fallback to in-memory
 					return self.pages.get(url)
-				
+
 				page = await collection.find_one({'url': url})
 				if page:
 					# Remove MongoDB _id field for consistency
@@ -112,7 +112,7 @@ class KnowledgeStorage:
 				return self.pages.get(url)
 		else:
 			return self.pages.get(url)
-	
+
 	async def store_link(self, from_url: str, to_url: str, link_data: dict[str, Any] | None = None) -> None:
 		"""
 		Store a link (relationship between pages).
@@ -128,7 +128,7 @@ class KnowledgeStorage:
 			'to_url': to_url,
 			**link_data,
 		}
-		
+
 		if self.use_mongodb:
 			try:
 				collection = await get_collection('links')
@@ -137,7 +137,7 @@ class KnowledgeStorage:
 					self.links.append(link_document)
 					logger.debug(f"Stored link in-memory (MongoDB unavailable): {from_url} -> {to_url}")
 					return
-				
+
 				# Upsert by from_url and to_url combination
 				await collection.update_one(
 					{'from_url': from_url, 'to_url': to_url},
@@ -153,7 +153,7 @@ class KnowledgeStorage:
 		else:
 			self.links.append(link_document)
 			logger.debug(f"Stored link in-memory: {from_url} -> {to_url}")
-	
+
 	async def get_links_from(self, url: str) -> list[dict[str, Any]]:
 		"""
 		Get all links from a page.
@@ -170,7 +170,7 @@ class KnowledgeStorage:
 				if collection is None:
 					# Fallback to in-memory
 					return [link for link in self.links if link.get('from_url') == url]
-				
+
 				cursor = collection.find({'from_url': url})
 				links = []
 				async for link in cursor:
@@ -183,7 +183,7 @@ class KnowledgeStorage:
 				return [link for link in self.links if link.get('from_url') == url]
 		else:
 			return [link for link in self.links if link.get('from_url') == url]
-	
+
 	async def get_links_to(self, url: str) -> list[dict[str, Any]]:
 		"""
 		Get all links to a page.
@@ -200,7 +200,7 @@ class KnowledgeStorage:
 				if collection is None:
 					# Fallback to in-memory
 					return [link for link in self.links if link.get('to_url') == url]
-				
+
 				cursor = collection.find({'to_url': url})
 				links = []
 				async for link in cursor:
@@ -213,7 +213,7 @@ class KnowledgeStorage:
 				return [link for link in self.links if link.get('to_url') == url]
 		else:
 			return [link for link in self.links if link.get('to_url') == url]
-	
+
 	async def clear(self) -> None:
 		"""
 		Clear all stored data (for testing).
@@ -222,16 +222,16 @@ class KnowledgeStorage:
 			try:
 				pages_collection = await get_collection('pages')
 				links_collection = await get_collection('links')
-				
+
 				if pages_collection:
 					await pages_collection.delete_many({})
 				if links_collection:
 					await links_collection.delete_many({})
-				
+
 				logger.debug("Cleared MongoDB collections")
 			except Exception as e:
 				logger.error(f"Failed to clear MongoDB: {e}")
-		
+
 		# Also clear in-memory storage
 		self.pages.clear()
 		self.links.clear()

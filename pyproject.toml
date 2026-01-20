@@ -4,7 +4,7 @@ description = "Browser Automation Service - Screen presenter agent with browser 
 authors = [{ name = "jaswanth" }]
 version = "0.11.2"
 readme = "README.md"
-requires-python = ">=3.11,<4.0"
+requires-python = ">=3.13,<4.0"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -40,10 +40,14 @@ dependencies = [
     "google-auth-oauthlib>=1.2.2",
     "mcp>=1.10.1",
     "pypdf>=5.7.0",
+    "pdfplumber>=0.11.0",  # Advanced table extraction for PDFs (built on pdfminer.six)
+    "pytesseract>=0.3.13",  # OCR for scanned documents (Tesseract OCR wrapper)
     "reportlab>=4.0.0",
     "cdp-use>=1.4.4",
     "pyotp>=2.9.0",
     "pillow>=11.2.1",
+    "boto3>=1.38.45",  # Required for S3 storage (DigitalOcean Spaces and AWS S3)
+    "imagehash>=4.3.1",  # Perceptual hashing for image deduplication (reduces Vision API costs)
     "cloudpickle>=3.1.1",
     "markdownify>=1.2.0",
     "python-docx>=1.2.0",
@@ -53,14 +57,22 @@ dependencies = [
     "redis>=5.0.0",
     "motor>=3.6.0", # MongoDB async driver
     "temporalio>=1.8.0", # Temporal workflow engine
-    "python-arango>=8.2.0", # ArangoDB driver for knowledge graph
+    "networkx>=3.0", # In-memory graph cache (optional, for small graphs)
     "markdown>=3.10",
     "beautifulsoup4>=4.14.3",
     "tiktoken>=0.12.0",
-    "lxml>=6.0.2",
+    "lxml>=5.3,<6.0",
     "playwright>=1.57.0",
     "robotexclusionrulesparser>=1.7.1",
     "imageio-ffmpeg>=0.6.0",
+    "deepgram-sdk>=3.0.0",  # Deepgram API for video transcription (cloud-based, high accuracy)
+    "opencv-python-headless>=4.10.0",  # SSIM deduplication, frame diff (headless for Docker/CI)
+    "tenacity>=9.0.0",  # Retry logic for API calls (Deepgram, OpenAI, Gemini)
+    "scikit-image>=0.24.0",  # SSIM computation for frame deduplication
+    # google-genai is used instead of deprecated google-generativeai (migrated in video ingestion)
+    "crawl4ai>=0.7.0",  # Open-source web crawling for documentation sites
+    "email-validator>=2.0.0",  # Email validation for FastAPI/Pydantic email fields
+    # Note: base64 is a standard library module, not a package dependency
 ]
 # google-api-core: only used for Google LLM APIs
 # pyperclip: only used for examples that use copy/paste
@@ -214,17 +226,8 @@ log_level = "DEBUG"
 [tool.hatch.metadata]
 allow-direct-references = true
 
-[tool.uv]
-# required-environments = [
-#     "sys_platform == 'darwin' and platform_machine == 'arm64'",
-#     "sys_platform == 'darwin' and platform_machine == 'x86_64'",
-#     "sys_platform == 'linux' and platform_machine == 'x86_64'",
-#     "sys_platform == 'linux' and platform_machine == 'aarch64'",
-#     # "sys_platform == 'linux' and platform_machine == 'arm64'",  # no pytorch wheels available yet
-#     "sys_platform == 'win32' and platform_machine == 'x86_64'",
-#     # "sys_platform == 'win32' and platform_machine == 'arm64'",  # no pytorch wheels available yet
-# ]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "ruff>=0.11.2",
     "tokencost>=0.1.16",
     "build>=1.2.2",
@@ -245,3 +248,14 @@ dev-dependencies = [
     "pytest-timeout>=2.4.0",
     "pydantic_settings>=2.10.1",
 ]
+
+[tool.uv]
+# required-environments = [
+#     "sys_platform == 'darwin' and platform_machine == 'arm64'",
+#     "sys_platform == 'darwin' and platform_machine == 'x86_64'",
+#     "sys_platform == 'linux' and platform_machine == 'x86_64'",
+#     "sys_platform == 'linux' and platform_machine == 'aarch64'",
+#     # "sys_platform == 'linux' and platform_machine == 'arm64'",  # no pytorch wheels available yet
+#     "sys_platform == 'win32' and platform_machine == 'x86_64'",
+#     # "sys_platform == 'win32' and platform_machine == 'arm64'",  # no pytorch wheels available yet
+# ]

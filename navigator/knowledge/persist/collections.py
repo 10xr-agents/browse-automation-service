@@ -16,12 +16,12 @@ All collections use 'brwsr_auto_svc_' prefix for namespace safety.
 """
 
 import logging
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
-from pydantic import BaseModel, Field
-from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field
 
 from navigator.storage.mongodb import get_collection
 
@@ -35,6 +35,9 @@ SCREENS_COLLECTION = 'knowledge_screens'
 TASKS_COLLECTION = 'knowledge_tasks'
 ACTIONS_COLLECTION = 'knowledge_actions'
 TRANSITIONS_COLLECTION = 'knowledge_transitions'
+BUSINESS_FUNCTIONS_COLLECTION = 'knowledge_business_functions'
+WORKFLOWS_COLLECTION = 'knowledge_workflows'
+USER_FLOWS_COLLECTION = 'knowledge_user_flows'
 
 
 class WorkflowStatus(str, Enum):
@@ -52,6 +55,7 @@ class SourceType(str, Enum):
 	DOCUMENTATION = 'documentation'
 	WEBSITE = 'website'
 	VIDEO = 'video'
+	FILE = 'file'  # File-based ingestion via S3
 
 
 class WorkflowStateCollection(BaseModel):
@@ -70,11 +74,12 @@ class WorkflowStateCollection(BaseModel):
 	metadata: dict[str, Any] = Field(default_factory=dict, description="Additional workflow metadata")
 	created_at: datetime = Field(default_factory=datetime.utcnow, description="Creation timestamp")
 	updated_at: datetime = Field(default_factory=datetime.utcnow, description="Last update timestamp")
-	
-	class Config:
-		json_encoders = {
+
+	model_config = ConfigDict(
+		json_encoders={
 			datetime: lambda v: v.isoformat(),
 		}
+	)
 
 
 class IngestionMetadataCollection(BaseModel):
@@ -91,11 +96,12 @@ class IngestionMetadataCollection(BaseModel):
 	ingested_at: datetime = Field(default_factory=datetime.utcnow, description="Ingestion timestamp")
 	last_updated: datetime = Field(default_factory=datetime.utcnow, description="Last update timestamp")
 	metadata: dict[str, Any] = Field(default_factory=dict, description="Source-specific metadata")
-	
-	class Config:
-		json_encoders = {
+
+	model_config = ConfigDict(
+		json_encoders={
 			datetime: lambda v: v.isoformat(),
 		}
+	)
 
 
 class ProcessingCheckpointCollection(BaseModel):
@@ -112,11 +118,12 @@ class ProcessingCheckpointCollection(BaseModel):
 	last_item_id: str | None = Field(None, description="ID of last processed item (for resumption)")
 	checkpoint_data: dict[str, Any] = Field(default_factory=dict, description="Activity-specific checkpoint data")
 	created_at: datetime = Field(default_factory=datetime.utcnow, description="Checkpoint creation timestamp")
-	
-	class Config:
-		json_encoders = {
+
+	model_config = ConfigDict(
+		json_encoders={
 			datetime: lambda v: v.isoformat(),
 		}
+	)
 
 
 async def get_workflow_state_collection() -> AsyncIOMotorCollection | None:
@@ -189,6 +196,36 @@ async def get_transitions_collection() -> AsyncIOMotorCollection | None:
 	return await get_collection(TRANSITIONS_COLLECTION)
 
 
+async def get_business_functions_collection() -> AsyncIOMotorCollection | None:
+	"""
+	Get business_functions collection (full definitions).
+	
+	Returns:
+		Motor collection instance or None if MongoDB unavailable
+	"""
+	return await get_collection(BUSINESS_FUNCTIONS_COLLECTION)
+
+
+async def get_workflows_collection() -> AsyncIOMotorCollection | None:
+	"""
+	Get workflows collection (full definitions).
+	
+	Returns:
+		Motor collection instance or None if MongoDB unavailable
+	"""
+	return await get_collection(WORKFLOWS_COLLECTION)
+
+
+async def get_user_flows_collection() -> AsyncIOMotorCollection | None:
+	"""
+	Get user flows collection (full definitions).
+	
+	Returns:
+		Motor collection instance or None if MongoDB unavailable
+	"""
+	return await get_collection(USER_FLOWS_COLLECTION)
+
+
 async def ensure_indexes() -> None:
 	"""
 	Create indexes for all knowledge persistence collections.
@@ -200,7 +237,7 @@ async def ensure_indexes() -> None:
 	- screens: screen_id (unique), website_id
 	- tasks: task_id (unique), website_id
 	- actions: action_id (unique), website_id
-	- transitions: transition_id (unique), source_screen_id, target_screen_id
+	- transitions: transition_id (unique), from_screen_id, to_screen_id
 	"""
 	try:
 		# Workflow state indexes
@@ -211,7 +248,7 @@ async def ensure_indexes() -> None:
 			await workflow_state_col.create_index('status')
 			await workflow_state_col.create_index('created_at')
 			logger.info(f"Created indexes for {WORKFLOW_STATE_COLLECTION}")
-		
+
 		# Ingestion metadata indexes
 		ingestion_col = await get_ingestion_metadata_collection()
 		if ingestion_col:
@@ -219,7 +256,7 @@ async def ensure_indexes() -> None:
 			await ingestion_col.create_index('content_hash')
 			await ingestion_col.create_index('source_url')
 			logger.info(f"Created indexes for {INGESTION_METADATA_COLLECTION}")
-		
+
 		# Processing checkpoint indexes
 		checkpoint_col = await get_checkpoint_collection()
 		if checkpoint_col:
@@ -230,38 +267,60 @@ async def ensure_indexes() -> None:
 			], unique=True)
 			await checkpoint_col.create_index('workflow_id')
 			logger.info(f"Created indexes for {PROCESSING_CHECKPOINT_COLLECTION}")
-		
+
 		# Screens collection indexes
 		screens_col = await get_screens_collection()
 		if screens_col:
 			await screens_col.create_index('screen_id', unique=True)
 			await screens_col.create_index('website_id')
+			await screens_col.create_index('knowledge_id')  # Index for knowledge_id queries
 			logger.info(f"Created indexes for {SCREENS_COLLECTION}")
-		
+
 		# Tasks collection indexes
 		tasks_col = await get_tasks_collection()
 		if tasks_col:
 			await tasks_col.create_index('task_id', unique=True)
 			await tasks_col.create_index('website_id')
+			await tasks_col.create_index('knowledge_id')  # Index for knowledge_id queries
 			logger.info(f"Created indexes for {TASKS_COLLECTION}")
-		
+
 		# Actions collection indexes
 		actions_col = await get_actions_collection()
 		if actions_col:
 			await actions_col.create_index('action_id', unique=True)
 			await actions_col.create_index('website_id')
+			await actions_col.create_index('knowledge_id')  # Index for knowledge_id queries
 			logger.info(f"Created indexes for {ACTIONS_COLLECTION}")
-		
+
 		# Transitions collection indexes
 		transitions_col = await get_transitions_collection()
 		if transitions_col:
 			await transitions_col.create_index('transition_id', unique=True)
-			await transitions_col.create_index('source_screen_id')
-			await transitions_col.create_index('target_screen_id')
+			await transitions_col.create_index('from_screen_id')
+			await transitions_col.create_index('to_screen_id')
+			await transitions_col.create_index('knowledge_id')  # Index for knowledge_id queries
 			logger.info(f"Created indexes for {TRANSITIONS_COLLECTION}")
-		
+
+		# Business functions collection indexes
+		business_functions_col = await get_business_functions_collection()
+		if business_functions_col:
+			await business_functions_col.create_index('business_function_id', unique=True)
+			await business_functions_col.create_index('website_id')
+			await business_functions_col.create_index('category')
+			await business_functions_col.create_index('knowledge_id')  # Index for knowledge_id queries
+			logger.info(f"Created indexes for {BUSINESS_FUNCTIONS_COLLECTION}")
+
+		# Workflows collection indexes
+		workflows_col = await get_workflows_collection()
+		if workflows_col:
+			await workflows_col.create_index('workflow_id', unique=True)
+			await workflows_col.create_index('website_id')
+			await workflows_col.create_index('business_function')
+			await workflows_col.create_index('knowledge_id')  # Index for knowledge_id queries
+			logger.info(f"Created indexes for {WORKFLOWS_COLLECTION}")
+
 		logger.info("✅ All knowledge persistence indexes created successfully")
-		
+
 	except Exception as e:
 		logger.error(f"Failed to create indexes: {e}")
 		raise
@@ -282,14 +341,17 @@ async def clear_all_collections() -> None:
 			await get_tasks_collection(),
 			await get_actions_collection(),
 			await get_transitions_collection(),
+			await get_business_functions_collection(),
+			await get_workflows_collection(),
+			await get_user_flows_collection(),
 		]
-		
+
 		for col in collections:
 			if col:
 				await col.delete_many({})
-		
+
 		logger.info("✅ Cleared all knowledge persistence collections")
-	
+
 	except Exception as e:
 		logger.error(f"Failed to clear collections: {e}")
 		raise

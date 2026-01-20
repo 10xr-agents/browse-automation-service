@@ -38,41 +38,41 @@ async def create_all_collections() -> bool:
 	"""
 	try:
 		logger.info("Creating ArangoDB collections for knowledge graph...")
-		
+
 		db = await get_graph_database()
 		if db is None:
 			return False
-		
+
 		# Document collections
 		doc_collections = [SCREENS_COLLECTION, SCREEN_GROUPS_COLLECTION]
-		
+
 		for coll_name in doc_collections:
 			if not db.has_collection(coll_name):
 				db.create_collection(coll_name, edge=False)
 				logger.info(f"✅ Created document collection: {coll_name}")
 			else:
 				logger.info(f"   Document collection exists: {coll_name}")
-		
+
 		# Edge collections
 		edge_collections = [
 			TRANSITIONS_COLLECTION,
 			GROUP_MEMBERSHIP_COLLECTION,
 			GLOBAL_RECOVERY_COLLECTION,
 		]
-		
+
 		for coll_name in edge_collections:
 			if not db.has_collection(coll_name):
 				db.create_collection(coll_name, edge=True)
 				logger.info(f"✅ Created edge collection: {coll_name}")
 			else:
 				logger.info(f"   Edge collection exists: {coll_name}")
-		
+
 		# Create indexes for performance
 		await _create_collection_indexes(db)
-		
+
 		logger.info("🎉 All collections created successfully!")
 		return True
-		
+
 	except Exception as e:
 		logger.error(f"❌ Failed to create collections: {e}", exc_info=True)
 		return False
@@ -86,19 +86,19 @@ async def _create_collection_indexes(db: Any) -> None:
 		if not screens.has_index("website_id"):
 			screens.add_hash_index(fields=["website_id"], unique=False)
 			logger.info("✅ Created index: screens.website_id")
-		
+
 		# Index on screen_groups.website_id
 		screen_groups = db.collection(SCREEN_GROUPS_COLLECTION)
 		if not screen_groups.has_index("website_id"):
 			screen_groups.add_hash_index(fields=["website_id"], unique=False)
 			logger.info("✅ Created index: screen_groups.website_id")
-		
+
 		# Index on transitions for from/to queries
 		transitions = db.collection(TRANSITIONS_COLLECTION)
 		# ArangoDB automatically indexes _from and _to for edge collections
-		
+
 		logger.info("   Indexes created successfully")
-		
+
 	except Exception as e:
 		logger.warning(f"Failed to create some indexes: {e}")
 
@@ -152,11 +152,11 @@ async def clear_all_collections() -> bool:
 	"""
 	try:
 		logger.warning("⚠️ Clearing all knowledge graph collections...")
-		
+
 		db = await get_graph_database()
 		if db is None:
 			return False
-		
+
 		collections = [
 			SCREENS_COLLECTION,
 			SCREEN_GROUPS_COLLECTION,
@@ -164,15 +164,15 @@ async def clear_all_collections() -> bool:
 			GROUP_MEMBERSHIP_COLLECTION,
 			GLOBAL_RECOVERY_COLLECTION,
 		]
-		
+
 		for coll_name in collections:
 			if db.has_collection(coll_name):
 				db.collection(coll_name).truncate()
 				logger.info(f"   Cleared: {coll_name}")
-		
+
 		logger.info("✅ All collections cleared")
 		return True
-		
+
 	except Exception as e:
 		logger.error(f"❌ Failed to clear collections: {e}")
 		return False

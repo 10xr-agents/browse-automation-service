@@ -35,7 +35,7 @@ class ExplorationProgress:
 	estimated_time_remaining: float | None = None  # seconds
 	processing_rate: float | None = None  # pages per minute
 	recent_pages: list[dict[str, Any]] | None = None  # List of recently completed pages with titles
-	
+
 	def to_dict(self) -> dict[str, Any]:
 		"""Convert to dictionary."""
 		data = asdict(self)
@@ -46,22 +46,22 @@ class ExplorationProgress:
 
 class ProgressObserver(ABC):
 	"""Abstract base class for progress observers."""
-	
+
 	@abstractmethod
 	async def on_progress(self, progress: ExplorationProgress) -> None:
 		"""Handle progress update."""
 		pass
-	
+
 	@abstractmethod
 	async def on_page_completed(self, url: str, result: dict[str, Any]) -> None:
 		"""Handle page completion."""
 		pass
-	
+
 	@abstractmethod
 	async def on_external_link_detected(self, from_url: str, to_url: str) -> None:
 		"""Handle external link detection."""
 		pass
-	
+
 	@abstractmethod
 	async def on_error(self, url: str, error: str) -> None:
 		"""Handle error."""
@@ -70,7 +70,7 @@ class ProgressObserver(ABC):
 
 class LoggingProgressObserver(ProgressObserver):
 	"""Simple logging-based progress observer."""
-	
+
 	async def on_progress(self, progress: ExplorationProgress) -> None:
 		"""Log progress update."""
 		logger.info(
@@ -80,16 +80,16 @@ class LoggingProgressObserver(ProgressObserver):
 			f"Failed: {progress.pages_failed} | "
 			f"Current: {progress.current_page or 'N/A'}"
 		)
-	
+
 	async def on_page_completed(self, url: str, result: dict[str, Any]) -> None:
 		"""Log page completion."""
 		success = result.get('success', False)
 		logger.info(f"Page completed: {url} (success: {success})")
-	
+
 	async def on_external_link_detected(self, from_url: str, to_url: str) -> None:
 		"""Log external link detection."""
 		logger.debug(f"External link detected: {from_url} -> {to_url} (not following)")
-	
+
 	async def on_error(self, url: str, error: str) -> None:
 		"""Log error."""
 		logger.error(f"Error processing {url}: {error}")
@@ -97,7 +97,7 @@ class LoggingProgressObserver(ProgressObserver):
 
 class WebSocketProgressObserver(ProgressObserver):
 	"""WebSocket-based progress observer for real-time UI updates."""
-	
+
 	def __init__(self, websocket_manager: Any = None):
 		"""
 		Initialize WebSocket progress observer.
@@ -106,7 +106,7 @@ class WebSocketProgressObserver(ProgressObserver):
 			websocket_manager: WebSocket manager instance (optional)
 		"""
 		self.websocket_manager = websocket_manager
-	
+
 	async def on_progress(self, progress: ExplorationProgress) -> None:
 		"""Broadcast progress via WebSocket."""
 		if self.websocket_manager:
@@ -114,7 +114,7 @@ class WebSocketProgressObserver(ProgressObserver):
 				'type': 'exploration_progress',
 				'data': progress.to_dict(),
 			})
-	
+
 	async def on_page_completed(self, url: str, result: dict[str, Any]) -> None:
 		"""Broadcast page completion via WebSocket."""
 		if self.websocket_manager:
@@ -125,7 +125,7 @@ class WebSocketProgressObserver(ProgressObserver):
 					'result': result,
 				},
 			})
-	
+
 	async def on_external_link_detected(self, from_url: str, to_url: str) -> None:
 		"""Broadcast external link detection via WebSocket."""
 		if self.websocket_manager:
@@ -136,7 +136,7 @@ class WebSocketProgressObserver(ProgressObserver):
 					'to_url': to_url,
 				},
 			})
-	
+
 	async def on_error(self, url: str, error: str) -> None:
 		"""Broadcast error via WebSocket."""
 		if self.websocket_manager:
@@ -151,7 +151,7 @@ class WebSocketProgressObserver(ProgressObserver):
 
 class RedisProgressObserver(ProgressObserver):
 	"""Redis Pub/Sub-based progress observer for high-frequency updates."""
-	
+
 	def __init__(self, redis_client: Any = None, channel_prefix: str = "exploration:"):
 		"""
 		Initialize Redis progress observer.
@@ -162,13 +162,13 @@ class RedisProgressObserver(ProgressObserver):
 		"""
 		self.redis_client = redis_client
 		self.channel_prefix = channel_prefix
-	
+
 	async def on_progress(self, progress: ExplorationProgress) -> None:
 		"""Publish progress to Redis."""
 		if self.redis_client:
 			channel = f"{self.channel_prefix}{progress.job_id}:progress"
 			await self.redis_client.publish(channel, json.dumps(progress.to_dict()))
-	
+
 	async def on_page_completed(self, url: str, result: dict[str, Any]) -> None:
 		"""Publish page completion to Redis."""
 		if self.redis_client:
@@ -179,7 +179,7 @@ class RedisProgressObserver(ProgressObserver):
 				'url': url,
 				'result': result,
 			}))
-	
+
 	async def on_external_link_detected(self, from_url: str, to_url: str) -> None:
 		"""Publish external link detection to Redis."""
 		if self.redis_client:
@@ -189,7 +189,7 @@ class RedisProgressObserver(ProgressObserver):
 				'from_url': from_url,
 				'to_url': to_url,
 			}))
-	
+
 	async def on_error(self, url: str, error: str) -> None:
 		"""Publish error to Redis."""
 		if self.redis_client:
@@ -202,7 +202,7 @@ class RedisProgressObserver(ProgressObserver):
 
 class CompositeProgressObserver(ProgressObserver):
 	"""Composite observer that forwards to multiple observers."""
-	
+
 	def __init__(self, observers: list[ProgressObserver]):
 		"""
 		Initialize composite observer.
@@ -211,28 +211,28 @@ class CompositeProgressObserver(ProgressObserver):
 			observers: List of progress observers
 		"""
 		self.observers = observers
-	
+
 	async def on_progress(self, progress: ExplorationProgress) -> None:
 		"""Forward to all observers."""
 		await asyncio.gather(
 			*[obs.on_progress(progress) for obs in self.observers],
 			return_exceptions=True,
 		)
-	
+
 	async def on_page_completed(self, url: str, result: dict[str, Any]) -> None:
 		"""Forward to all observers."""
 		await asyncio.gather(
 			*[obs.on_page_completed(url, result) for obs in self.observers],
 			return_exceptions=True,
 		)
-	
+
 	async def on_external_link_detected(self, from_url: str, to_url: str) -> None:
 		"""Forward to all observers."""
 		await asyncio.gather(
 			*[obs.on_external_link_detected(from_url, to_url) for obs in self.observers],
 			return_exceptions=True,
 		)
-	
+
 	async def on_error(self, url: str, error: str) -> None:
 		"""Forward to all observers."""
 		await asyncio.gather(

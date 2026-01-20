@@ -37,7 +37,7 @@ class KnowledgeVerificationWorkflow:
 	7. Generate report
 	8. Cleanup
 	"""
-	
+
 	@workflow.run
 	async def run(self, input: VerificationWorkflowInput) -> VerificationWorkflowOutput:
 		"""
@@ -54,7 +54,7 @@ class KnowledgeVerificationWorkflow:
 			f"Starting verification workflow: job_id={input.verification_job_id}, "
 			f"target={input.target_type}:{input.target_id}"
 		)
-		
+
 		try:
 			# Phase 1: Load knowledge definitions
 			workflow_logger.info("Phase 1: Loading knowledge definitions")
@@ -67,7 +67,7 @@ class KnowledgeVerificationWorkflow:
 					'initial_interval': timedelta(seconds=1),
 				},
 			)
-			
+
 			if not definitions.get('screens'):
 				workflow_logger.warning("No screens found to verify")
 				return VerificationWorkflowOutput(
@@ -80,7 +80,7 @@ class KnowledgeVerificationWorkflow:
 					duration_seconds=0.0,
 					report_id="",
 				)
-			
+
 			# Phase 2: Launch browser session
 			workflow_logger.info("Phase 2: Launching browser session")
 			browser_session = await workflow.execute_activity(
@@ -92,7 +92,7 @@ class KnowledgeVerificationWorkflow:
 					'initial_interval': timedelta(seconds=5),
 				},
 			)
-			
+
 			# Phase 3-5: Verify screens and replay actions
 			workflow_logger.info(f"Phase 3-5: Verifying {len(definitions['screens'])} screens")
 			verification_results = await workflow.execute_activity(
@@ -109,7 +109,7 @@ class KnowledgeVerificationWorkflow:
 					'maximum_attempts': 1,  # Don't retry verification
 				},
 			)
-			
+
 			# Phase 6: Apply enrichments (if enabled and discrepancies found)
 			changes_made = 0
 			if verification_results.get('discrepancies') and input.verification_options.get('enable_enrichment', False):
@@ -126,7 +126,7 @@ class KnowledgeVerificationWorkflow:
 					},
 				)
 				changes_made = enrichment_results.get('changes_made', 0)
-			
+
 			# Phase 7: Generate verification report
 			workflow_logger.info("Phase 7: Generating verification report")
 			report = await workflow.execute_activity(
@@ -139,7 +139,7 @@ class KnowledgeVerificationWorkflow:
 				},
 				start_to_close_timeout=timedelta(seconds=60),
 			)
-			
+
 			# Phase 8: Cleanup browser session
 			workflow_logger.info("Phase 8: Cleaning up browser session")
 			await workflow.execute_activity(
@@ -147,14 +147,14 @@ class KnowledgeVerificationWorkflow:
 				browser_session,
 				start_to_close_timeout=timedelta(seconds=30),
 			)
-			
+
 			workflow_logger.info(
 				f"Verification complete: screens={verification_results['screens_verified']}, "
 				f"actions={verification_results['actions_replayed']}, "
 				f"discrepancies={verification_results['discrepancies_found']}, "
 				f"changes={changes_made}"
 			)
-			
+
 			return VerificationWorkflowOutput(
 				verification_job_id=input.verification_job_id,
 				success=True,
@@ -165,10 +165,10 @@ class KnowledgeVerificationWorkflow:
 				duration_seconds=report.get('duration_seconds', 0.0),
 				report_id=report.get('report_id', ''),
 			)
-		
+
 		except Exception as e:
 			workflow_logger.error(f"Verification workflow failed: {e}", exc_info=True)
-			
+
 			# Try to cleanup browser if it was launched
 			try:
 				if 'browser_session' in locals():
@@ -179,5 +179,5 @@ class KnowledgeVerificationWorkflow:
 					)
 			except:
 				pass  # Best effort cleanup
-			
+
 			raise

@@ -12,12 +12,12 @@ logger = logging.getLogger(__name__)
 
 class SequenceTracker:
 	"""Tracks last processed sequence number per session."""
-	
+
 	def __init__(self):
 		"""Initialize sequence tracker."""
 		self._last_processed: dict[str, int] = {}
 		self._lock = asyncio.Lock()
-	
+
 	async def get_last_processed(self, session_id: str) -> int:
 		"""Get last processed sequence number for session.
 		
@@ -29,7 +29,7 @@ class SequenceTracker:
 		"""
 		async with self._lock:
 			return self._last_processed.get(session_id, 0)
-	
+
 	async def update_last_processed(self, session_id: str, seq_num: int) -> None:
 		"""Update last processed sequence number for session.
 		
@@ -42,7 +42,7 @@ class SequenceTracker:
 			if seq_num > current:
 				self._last_processed[session_id] = seq_num
 				logger.debug(f"Updated last processed sequence for {session_id}: {seq_num}")
-	
+
 	async def validate_sequence(self, session_id: str, seq_num: int) -> tuple[bool, int | None]:
 		"""Validate sequence number matches expected.
 		
@@ -58,7 +58,7 @@ class SequenceTracker:
 		async with self._lock:
 			last_processed = self._last_processed.get(session_id, 0)
 			expected = last_processed + 1
-			
+
 			if seq_num == expected:
 				return True, None
 			elif seq_num < expected:
@@ -69,7 +69,7 @@ class SequenceTracker:
 				# Gap detected (seq_num > expected)
 				logger.warning(f"Sequence gap detected for {session_id}: received {seq_num}, expected {expected}")
 				return False, expected
-	
+
 	async def clear_session(self, session_id: str) -> None:
 		"""Clear sequence tracking for session.
 		

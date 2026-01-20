@@ -11,13 +11,13 @@ This service handles:
 import asyncio
 import io
 import logging
-from typing import Any
 
 try:
+	import time
+
+	import jwt
 	import livekit.rtc as rtc
 	from PIL import Image
-	import jwt
-	import time
 
 	LIVEKIT_AVAILABLE = True
 except (ImportError, AttributeError) as e:
@@ -99,7 +99,7 @@ class LiveKitStreamingService:
 			JWT token string
 		"""
 		logger.debug(f'[LiveKit] Generating token for room: {self.room_name}, identity: {self.participant_identity}')
-		
+
 		if self.livekit_token:
 			logger.debug('[LiveKit] Using pre-generated token')
 			return self.livekit_token
@@ -108,12 +108,12 @@ class LiveKitStreamingService:
 			raise ValueError('Cannot generate token: API key and secret required')
 
 		logger.debug(f'[LiveKit] Creating AccessToken with API key (length: {len(self.livekit_api_key)})')
-		
+
 		# Generate JWT token with LiveKit claims
 		# LiveKit uses HS256 algorithm with API secret as the signing key
 		now = int(time.time())
 		exp = now + 3600  # Token expires in 1 hour (3600 seconds)
-		
+
 		# Build JWT claims following LiveKit token structure
 		claims = {
 			'iss': self.livekit_api_key,  # Issuer (API key)
@@ -128,11 +128,11 @@ class LiveKitStreamingService:
 				'canPublishData': True,
 			},
 		}
-		
+
 		# Add participant name if provided
 		if self.participant_name:
 			claims['name'] = self.participant_name
-		
+
 		# Sign token with API secret
 		jwt_token = jwt.encode(claims, self.livekit_api_secret, algorithm='HS256')
 		logger.debug(f'[LiveKit] Token generated successfully (length: {len(jwt_token)})')
@@ -146,7 +146,7 @@ class LiveKitStreamingService:
 
 		logger.info(f'[LiveKit] Connecting to room: {self.room_name} at {self.livekit_url}')
 		logger.debug(f'[LiveKit] Room dimensions: {self.width}x{self.height}, FPS: {self.fps}')
-		
+
 		self.room = rtc.Room()
 
 		# Generate token if needed
@@ -164,7 +164,7 @@ class LiveKitStreamingService:
 			await self.stop_publishing()
 		except Exception as e:
 			logger.debug(f'Error stopping publishing during disconnect: {e}')
-		
+
 		if self.room:
 			try:
 				await self.room.disconnect()
@@ -192,7 +192,7 @@ class LiveKitStreamingService:
 		# Create video source
 		self.video_source = rtc.VideoSource(self.width, self.height)
 		logger.debug('[LiveKit] VideoSource created')
-		
+
 		self.video_track = rtc.LocalVideoTrack.create_video_track('browser-screen', self.video_source)
 		logger.debug('[LiveKit] LocalVideoTrack created: browser-screen')
 
@@ -306,7 +306,7 @@ class LiveKitStreamingService:
 					# No running loop - we're shutting down
 					logger.debug('[LiveKit] No running event loop, stopping capture')
 					break
-				
+
 				logger.error(f'[LiveKit] Error capturing frame: {e}', exc_info=True)
 				await asyncio.sleep(0.1)
 
@@ -323,7 +323,7 @@ class LiveKitStreamingService:
 			# Load image (no debug logs - too frequent at 30fps)
 			img = Image.open(io.BytesIO(screenshot_bytes))
 			original_size = img.size
-			
+
 			img = img.convert('RGBA')
 
 			# Resize if needed

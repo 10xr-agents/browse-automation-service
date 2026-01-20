@@ -1,64 +1,41 @@
 """
-Knowledge Graph Construction Module.
+Knowledge Graph Query Module.
 
-Implements ArangoDB graph construction for navigation and recovery.
+Provides graph query functions using MongoDB as the single source of truth.
+NetworkX can be used in-memory by agents when needed for graph operations.
 """
 
-from navigator.knowledge.graph.collections import (
-	create_all_collections,
-	get_screen_collection,
-	get_screen_group_collection,
-	get_transition_collection,
-	get_group_membership_collection,
-	get_global_recovery_collection,
-)
-from navigator.knowledge.graph.config import (
-	get_graph_database,
-	verify_graph_connection,
-)
-from navigator.knowledge.graph.edges import create_transition_edges, create_membership_edges, create_recovery_edges
-from navigator.knowledge.graph.graphs import create_all_graphs, get_navigation_graph, get_recovery_graph
-from navigator.knowledge.graph.groups import create_screen_groups, group_screens_by_pattern
-from navigator.knowledge.graph.nodes import create_screen_nodes, upsert_screen_node
-from navigator.knowledge.graph.validation import validate_graph_structure
+# Note: Graph query functions use MongoDB as the single source of truth.
+# All knowledge is now stored in MongoDB. NetworkX can be used in-memory by agents when needed.
+from navigator.knowledge.graph.collections import create_all_collections
+from navigator.knowledge.graph.config import get_graph_database, verify_graph_connection
+from navigator.knowledge.graph.edges import create_transition_edges
+from navigator.knowledge.graph.graphs import create_all_graphs
+from navigator.knowledge.graph.groups import create_screen_groups
+from navigator.knowledge.graph.nodes import create_screen_nodes
 from navigator.knowledge.graph.queries import (
 	find_shortest_path,
 	get_adjacent_screens,
-	search_screens_by_name,
-	search_screens_by_url_pattern,
+	get_screen_statistics,
 	get_transitions_from_screen,
 	get_transitions_to_screen,
-	get_screen_statistics,
+	search_screens_by_name,
+	search_screens_by_url_pattern,
 )
+from navigator.knowledge.graph.validation import validate_graph_structure
 
 __all__ = [
-	# Configuration
-	'get_graph_database',
-	'verify_graph_connection',
-	# Collections
+	# Collections (for tests)
 	'create_all_collections',
-	'get_screen_collection',
-	'get_screen_group_collection',
-	'get_transition_collection',
-	'get_group_membership_collection',
-	'get_global_recovery_collection',
-	# Graphs
+	# Graph operations
 	'create_all_graphs',
-	'get_navigation_graph',
-	'get_recovery_graph',
-	# Nodes
-	'create_screen_nodes',
-	'upsert_screen_node',
-	# Edges
-	'create_transition_edges',
-	'create_membership_edges',
-	'create_recovery_edges',
-	# Groups
 	'create_screen_groups',
-	'group_screens_by_pattern',
-	# Validation
+	'create_screen_nodes',
+	'create_transition_edges',
+	'get_graph_database',
 	'validate_graph_structure',
-	# Queries (Phase 6.2)
+	'verify_graph_connection',
+	# Queries (MongoDB-based)
 	'find_shortest_path',
 	'get_adjacent_screens',
 	'search_screens_by_name',

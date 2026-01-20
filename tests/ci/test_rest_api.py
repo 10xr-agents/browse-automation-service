@@ -13,7 +13,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 # Import API models
-from navigator.knowledge.api_v2 import (
+from navigator.knowledge.rest_api import (
 	StartIngestionRequest,
 	StartIngestionResponse,
 	GraphQueryRequest,

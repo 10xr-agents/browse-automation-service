@@ -10,7 +10,7 @@ These primitives wrap the existing event-driven system for MVP purposes.
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ActionType(str, Enum):
@@ -40,8 +40,7 @@ class ActionCommand(BaseModel):
 	action_type: ActionType | str = Field(..., description='Type of action to execute')
 	params: dict[str, Any] = Field(default_factory=dict, description='Action-specific parameters')
 
-	class Config:
-		use_enum_values = True
+	model_config = ConfigDict(use_enum_values=True)
 
 
 class ClickActionCommand(ActionCommand):

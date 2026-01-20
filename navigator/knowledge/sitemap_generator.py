@@ -23,7 +23,7 @@ class SiteMapGenerator:
 	- Functional site maps (navigation flows, user journeys, action sequences)
 	- Export to JSON/XML/GraphML/Mermaid formats
 	"""
-	
+
 	def __init__(
 		self,
 		storage: KnowledgeStorage,
@@ -41,9 +41,9 @@ class SiteMapGenerator:
 		self.storage = storage
 		self.flow_mapper = flow_mapper or FunctionalFlowMapper()
 		self.vector_store = vector_store
-		
+
 		logger.debug("SiteMapGenerator initialized")
-	
+
 	async def generate_semantic_sitemap(self) -> dict[str, Any]:
 		"""
 		Generate semantic site map (hierarchical structure based on content).
@@ -56,24 +56,24 @@ class SiteMapGenerator:
 			if hasattr(self.storage, 'pages'):
 				pages = list(self.storage.pages.values())
 			else:
-				# For ArangoDB, we would query all pages
+				# Query all pages from MongoDB
 				# For now, return empty structure
 				pages = []
-			
+
 			# Group by topics/categories
 			topics: dict[str, list[dict[str, Any]]] = {}
 			hierarchy: list[dict[str, Any]] = []
-			
+
 			for page in pages:
 				page_topics = page.get('topics', {})
 				page_categories = page_topics.get('categories', [])
-				
+
 				# Group by first category (or "Uncategorized")
 				category = page_categories[0] if page_categories else "Uncategorized"
-				
+
 				if category not in topics:
 					topics[category] = []
-				
+
 				topics[category].append({
 					'url': page.get('url', ''),
 					'title': page.get('title', ''),
@@ -81,7 +81,7 @@ class SiteMapGenerator:
 					'main_topics': page_topics.get('main_topics', []),
 					'keywords': page_topics.get('keywords', [])[:10],  # Top 10 keywords
 				})
-			
+
 			# Build hierarchy
 			for category, category_pages in topics.items():
 				hierarchy.append({
@@ -89,7 +89,7 @@ class SiteMapGenerator:
 					'pages': category_pages,
 					'count': len(category_pages),
 				})
-			
+
 			return {
 				'hierarchy': hierarchy,
 				'topics': list(topics.keys()),
@@ -105,7 +105,7 @@ class SiteMapGenerator:
 				'categories': 0,
 				'error': str(e),
 			}
-	
+
 	async def generate_functional_sitemap(self) -> dict[str, Any]:
 		"""
 		Generate functional site map (navigation flows, user journeys).
@@ -116,21 +116,21 @@ class SiteMapGenerator:
 		try:
 			# Analyze flows
 			flow_analysis = self.flow_mapper.analyze_flows()
-			
+
 			# Get navigation structure
 			navigation: list[dict[str, Any]] = []
-			
+
 			# Build navigation from flow mapper
 			entry_points = flow_analysis.get('entry_points', [])
 			popular_paths = flow_analysis.get('popular_paths', [])
-			
+
 			# Create navigation structure
 			for entry_point in entry_points:
 				navigation.append({
 					'entry_point': entry_point,
 					'type': 'entry',
 				})
-			
+
 			# Get user journeys (popular paths)
 			user_journeys: list[dict[str, Any]] = []
 			for path in popular_paths:
@@ -138,7 +138,7 @@ class SiteMapGenerator:
 					'path': path,
 					'steps': len(path),
 				})
-			
+
 			return {
 				'navigation': navigation,
 				'user_journeys': user_journeys,
@@ -158,7 +158,7 @@ class SiteMapGenerator:
 				'avg_path_length': 0.0,
 				'error': str(e),
 			}
-	
+
 	async def export_to_json(self, sitemap: dict[str, Any], output_path: str | None = None) -> str:
 		"""
 		Export site map to JSON format.
@@ -171,16 +171,16 @@ class SiteMapGenerator:
 			JSON string representation
 		"""
 		import json
-		
+
 		json_str = json.dumps(sitemap, indent=2)
-		
+
 		if output_path:
 			with open(output_path, 'w') as f:
 				f.write(json_str)
 			logger.debug(f"Exported site map to {output_path}")
-		
+
 		return json_str
-	
+
 	async def export_to_xml(self, sitemap: dict[str, Any], output_path: str | None = None) -> str:
 		"""
 		Export site map to XML format (sitemap.xml compatible).
@@ -194,10 +194,10 @@ class SiteMapGenerator:
 		"""
 		xml_lines = ['<?xml version="1.0" encoding="UTF-8"?>']
 		xml_lines.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
-		
+
 		# Extract URLs from hierarchy (semantic) or navigation (functional)
 		urls = set()
-		
+
 		if 'hierarchy' in sitemap:
 			for category_data in sitemap['hierarchy']:
 				for page in category_data.get('pages', []):
@@ -210,19 +210,19 @@ class SiteMapGenerator:
 				entry_point = nav_item.get('entry_point', '')
 				if entry_point:
 					urls.add(entry_point)
-		
+
 		# Generate XML entries
 		for url in urls:
 			xml_lines.append('  <url>')
 			xml_lines.append(f'    <loc>{url}</loc>')
 			xml_lines.append('  </url>')
-		
+
 		xml_lines.append('</urlset>')
 		xml_str = '\n'.join(xml_lines)
-		
+
 		if output_path:
 			with open(output_path, 'w') as f:
 				f.write(xml_str)
 			logger.debug(f"Exported site map to {output_path}")
-		
+
 		return xml_str

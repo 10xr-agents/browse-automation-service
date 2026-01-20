@@ -34,16 +34,16 @@ def get_arangodb_url() -> str:
 	arangodb_url = os.getenv("ARANGODB_URL")
 	if arangodb_url:
 		return arangodb_url
-	
+
 	# Try separate host/port/credentials
 	host = os.getenv("ARANGODB_HOST", "localhost")
 	port = os.getenv("ARANGODB_PORT", "8529")
 	username = os.getenv("ARANGODB_USERNAME")
 	password = os.getenv("ARANGODB_PASSWORD")
-	
+
 	if username and password:
 		return f"http://{username}:{password}@{host}:{port}"
-	
+
 	# If no credentials, return basic URL (will need auth later)
 	logger.warning(
 		"ArangoDB credentials not found in environment. "
@@ -71,14 +71,14 @@ def get_arangodb_credentials() -> tuple[str, str]:
 				return (parsed.username, parsed.password)
 		except Exception:
 			pass
-	
+
 	# Try separate environment variables
 	username = os.getenv("ARANGODB_USERNAME")
 	password = os.getenv("ARANGODB_PASSWORD")
-	
+
 	if username and password:
 		return (username, password)
-	
+
 	raise ValueError(
 		"ArangoDB credentials not found. "
 		"Please set ARANGODB_URL (with credentials) or ARANGODB_USERNAME/ARANGODB_PASSWORD "
@@ -115,7 +115,7 @@ async def get_arangodb_client():
 		ArangoDB client instance or None if ArangoDB not available
 	"""
 	global _arangodb_client
-	
+
 	if _arangodb_client is None:
 		try:
 			# Import python-arango
@@ -126,44 +126,44 @@ async def get_arangodb_client():
 					"python-arango not installed. Install with: pip install python-arango"
 				)
 				return None
-			
+
 			# Get connection details
 			arangodb_url = get_arangodb_url()
 			username, password = get_arangodb_credentials()
-			
+
 			# Parse host and port from URL
 			parsed = urlparse(arangodb_url)
 			host = parsed.hostname or "localhost"
 			port = parsed.port or 8529
 			protocol = parsed.scheme or "http"
-			
+
 			# Create client
 			_arangodb_client = ArangoClient(hosts=f"{protocol}://{host}:{port}")
-			
+
 			# Test connection by verifying authentication
 			sys_db = _arangodb_client.db(
 				"_system", username=username, password=password, verify=True
 			)
-			
+
 			# Verify connection
 			version_info = sys_db.version()
 			logger.info(
 				f"ArangoDB client connected to {protocol}://{host}:{port} "
 				f"(version: {version_info})"
 			)
-			
+
 			return _arangodb_client
-			
+
 		except ValueError as e:
 			logger.error(f"ArangoDB configuration error: {e}")
 			_arangodb_client = None
 			return None
 		except Exception as e:
 			logger.error(f"ArangoDB connection failed: {e}")
-			logger.error(f"   Make sure ArangoDB is running and accessible")
+			logger.error("   Make sure ArangoDB is running and accessible")
 			_arangodb_client = None
 			return None
-	
+
 	return _arangodb_client
 
 
@@ -175,28 +175,28 @@ async def get_arangodb_database():
 		ArangoDB database instance or None if ArangoDB not available
 	"""
 	global _arangodb_db
-	
+
 	if _arangodb_db is None:
 		client = await get_arangodb_client()
 		if client is None:
 			return None
-		
+
 		try:
 			database_name = get_arangodb_database_name()
 			username, password = get_arangodb_credentials()
-			
+
 			# Connect to database
 			_arangodb_db = client.db(
 				database_name, username=username, password=password, verify=True
 			)
-			
+
 			logger.info(f"ArangoDB database '{database_name}' initialized")
-			
+
 		except Exception as e:
 			logger.error(f"Failed to connect to ArangoDB database: {e}")
 			_arangodb_db = None
 			return None
-	
+
 	return _arangodb_db
 
 
@@ -213,7 +213,7 @@ async def get_arangodb_collection(collection_name: str):
 	db = await get_arangodb_database()
 	if db is None:
 		return None
-	
+
 	try:
 		# Check if collection exists
 		if db.has_collection(collection_name):
@@ -242,7 +242,7 @@ async def create_arangodb_collection(
 	db = await get_arangodb_database()
 	if db is None:
 		return False
-	
+
 	try:
 		if not db.has_collection(collection_name):
 			db.create_collection(collection_name, edge=edge)
@@ -272,7 +272,7 @@ async def create_arangodb_graph(graph_name: str, edge_definitions: list[dict]) -
 	db = await get_arangodb_database()
 	if db is None:
 		return False
-	
+
 	try:
 		if not db.has_graph(graph_name):
 			db.create_graph(graph_name, edge_definitions=edge_definitions)
@@ -286,7 +286,7 @@ async def create_arangodb_graph(graph_name: str, edge_definitions: list[dict]) -
 def close_arangodb_connection():
 	"""Close ArangoDB connection."""
 	global _arangodb_client, _arangodb_db
-	
+
 	if _arangodb_client:
 		# python-arango doesn't require explicit close
 		_arangodb_client = None

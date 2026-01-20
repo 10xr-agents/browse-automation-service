@@ -17,7 +17,7 @@ from navigator.knowledge.vector_store import VectorStore
 
 # Phase 6: Production REST API
 try:
-	from navigator.knowledge.api_v2 import create_knowledge_api_router
+	from navigator.knowledge.rest_api import create_knowledge_api_router
 	_API_AVAILABLE = True
 except ImportError:
 	_API_AVAILABLE = False

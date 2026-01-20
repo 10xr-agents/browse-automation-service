@@ -13,12 +13,14 @@ from datetime import datetime, timedelta
 import pytest
 from temporalio.client import Client
 
-from navigator.temporal.activities_v2 import (
+from navigator.temporal.activities import (
+	init_activity_dependencies,
+	ingest_source_activity,
+)
+from navigator.schemas import (
 	IngestSourceInput,
 	IngestSourceResult,
 	SourceType,
-	init_activity_dependencies_v2,
-	ingest_source_activity,
 )
 from navigator.temporal.config import TemporalConfig, get_temporal_client
 from navigator.temporal.idempotency import IdempotencyManager
@@ -26,7 +28,7 @@ from navigator.schemas import (
 	KnowledgeExtractionInputV2,
 	KnowledgeExtractionResultV2,
 )
-from navigator.temporal.workflows_v2 import KnowledgeExtractionWorkflowV2
+from navigator.temporal.workflows import KnowledgeExtractionWorkflowV2
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

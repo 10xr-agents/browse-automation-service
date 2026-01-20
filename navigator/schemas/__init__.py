@@ -12,52 +12,79 @@ Usage:
 
 # Domain schemas (Pydantic models - rich validation)
 from navigator.schemas.domain import (
-	# Enums
-	SourceType,
-	DocumentFormat,
-	VideoFormat,
-	# Models
-	SourceMetadata,
 	ContentChunk,
+	DataElement,
+	DocumentFormat,
+	FrameAnalysisResponse,
 	IngestionError,
 	IngestionResult,
+	# Models
+	SourceMetadata,
+	# Enums
+	SourceType,
+	# Video frame analysis schemas (structured outputs)
+	UIElement,
+	VideoFormat,
+	VisualIndicator,
+	detect_document_format,
 	# Utilities
 	detect_source_type,
-	detect_document_format,
 	detect_video_format,
 )
 
 # Temporal schemas (Dataclasses - lightweight serialization)
 from navigator.schemas.temporal import (
-	# Workflow enums
-	WorkflowPhase,
-	# Workflow I/O
-	KnowledgeExtractionInputV2,
-	KnowledgeExtractionResultV2,
-	KnowledgeExtractionProgressV2,
-	# Activity I/O - Ingestion
-	IngestSourceInput,
-	IngestSourceResult,
+	# Idempotency
+	ActivityExecutionLog,
+	AnalyzeFramesBatchInput,
+	AnalyzeFramesBatchResult,
+	AssembleVideoIngestionInput,
+	AssembleVideoIngestionResult,
+	# Activity I/O - Graph
+	BuildGraphInput,
+	BuildGraphResult,
+	# Activity I/O - Delete Knowledge
+	DeleteKnowledgeInput,
+	DeleteKnowledgeResult,
+	# Activity I/O - Enrichment
+	EnrichKnowledgeInput,
+	EnrichKnowledgeResult,
+	# Activity I/O - Primary URL Exploration
+	ExplorePrimaryUrlInput,
+	ExplorePrimaryUrlResult,
+	ExtractActionsInput,
+	ExtractActionsResult,
+	ExtractBusinessFunctionsInput,
+	ExtractBusinessFunctionsResult,
 	# Activity I/O - Extraction
 	ExtractScreensInput,
 	ExtractScreensResult,
 	ExtractTasksInput,
 	ExtractTasksResult,
-	ExtractActionsInput,
-	ExtractActionsResult,
 	ExtractTransitionsInput,
 	ExtractTransitionsResult,
-	# Activity I/O - Graph
-	BuildGraphInput,
-	BuildGraphResult,
+	# Activity I/O - User Flow Extraction (Phase 4)
+	ExtractUserFlowsInput,
+	ExtractUserFlowsResult,
+	ExtractWorkflowsInput,
+	ExtractWorkflowsResult,
+	FilterFramesInput,
+	FilterFramesResult,
+	# Activity I/O - Ingestion
+	IngestSourceInput,
+	IngestSourceResult,
+	# Workflow I/O
+	KnowledgeExtractionInputV2,
+	KnowledgeExtractionProgressV2,
+	KnowledgeExtractionResultV2,
+	# Activity I/O - Video Sub-Activities
+	TranscribeVideoInput,
+	TranscribeVideoResult,
 	# Activity I/O - Verification
 	VerifyExtractionInput,
 	VerifyExtractionResult,
-	# Activity I/O - Enrichment
-	EnrichKnowledgeInput,
-	EnrichKnowledgeResult,
-	# Idempotency
-	ActivityExecutionLog,
+	# Workflow enums
+	WorkflowPhase,
 )
 
 __all__ = [
@@ -74,6 +101,11 @@ __all__ = [
 	'detect_source_type',
 	'detect_document_format',
 	'detect_video_format',
+	# Domain - Video Frame Analysis (Structured Outputs)
+	'UIElement',
+	'DataElement',
+	'VisualIndicator',
+	'FrameAnalysisResponse',
 	# Temporal - Workflow
 	'WorkflowPhase',
 	'KnowledgeExtractionInputV2',
@@ -90,11 +122,29 @@ __all__ = [
 	'ExtractActionsResult',
 	'ExtractTransitionsInput',
 	'ExtractTransitionsResult',
+	'ExtractBusinessFunctionsInput',
+	'ExtractBusinessFunctionsResult',
+	'ExtractWorkflowsInput',
+	'ExtractWorkflowsResult',
+	'ExtractUserFlowsInput',
+	'ExtractUserFlowsResult',
 	'BuildGraphInput',
 	'BuildGraphResult',
 	'VerifyExtractionInput',
 	'VerifyExtractionResult',
 	'EnrichKnowledgeInput',
 	'EnrichKnowledgeResult',
+	'DeleteKnowledgeInput',
+	'DeleteKnowledgeResult',
+	'TranscribeVideoInput',
+	'TranscribeVideoResult',
+	'FilterFramesInput',
+	'FilterFramesResult',
+	'AnalyzeFramesBatchInput',
+	'AnalyzeFramesBatchResult',
+	'AssembleVideoIngestionInput',
+	'AssembleVideoIngestionResult',
+	'ExplorePrimaryUrlInput',
+	'ExplorePrimaryUrlResult',
 	'ActivityExecutionLog',
 ]

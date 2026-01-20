@@ -1,563 +1,541 @@
 # Cursor Rules for Browser Automation Service
 
-This file provides development guidelines and best practices for working with the Browser Automation Service codebase.
-
-## Code Organization Philosophy
-
-### Core Principle: Separation of Concerns
-
-We maintain a **clear distinction** between:
-1. **Browser-Use Core Code** (`browser_use/` directory) - Original Browser-Use library (embedded source)
-2. **Our Extensions** (`navigator/` directory) - Our custom code for Browser Automation Service
-
-This separation enables:
-- **Easy Browser-Use Upgrades**: Can upgrade Browser-Use code independently
-- **Clear Boundaries**: Know what's ours vs what's upstream
-- **Maintainability**: Easier to track changes and contributions
-- **Performance**: Direct source access while maintaining upgrade path
+Development guidelines and best practices for the Browser Automation Service codebase.
 
 ---
 
-## Code Separation Guidelines
+## 📋 Quick Reference: All Rules Summary
 
-### 1. Directory Structure
+### 🚨 CRITICAL RULES (Strictly Enforced)
 
+1. **File Length**: Maximum 500 lines per file (hard limit), warning at 400 lines
+2. **Code Separation**: Keep `browser_use/` (upstream) and `navigator/` (our code) separate
+3. **Extend, Don't Modify**: Prefer extending Browser-Use over modifying it
+4. **Documentation**: Only 3 canonical docs - never create new doc files
+5. **Dependencies**: Always use `uv`, never `pip`
+6. **Code Style**: Tabs (not spaces), Python 3.12+ typing, async/await, Pydantic v2
+7. **Testing**: Tests in `tests/ci/` with prefix `test_navigator_*`
+
+### 📁 Directory Structure
+- `browser_use/` - Embedded Browser-Use library (upstream, don't modify)
+- `navigator/` - Our custom code (full control)
+- `dev-docs/` - Only 3 canonical documentation files
+
+### 🔧 Common Commands
+```bash
+uv run pytest tests/ci/              # Run tests
+uv run ruff check --fix              # Lint & format
+uv run pyright                       # Type check
+uv sync                              # Install dependencies
 ```
-/
-├── browser_use/          # Browser-Use core library (upstream code)
-│   ├── browser/
-│   ├── agent/
-│   ├── tools/
-│   └── ...
-│
-├── navigator/            # Our extensions (custom code)
-│   ├── action/           # Action command system
-│   ├── session/          # Session management
-│   ├── streaming/        # LiveKit streaming
-│   ├── server/           # MCP and WebSocket servers
-│   ├── knowledge/        # Knowledge retrieval flow
-│   ├── presentation/     # Presentation flow management
-│   └── ...
-│
-└── dev-docs/             # Our documentation (3 canonical guides only)
-    ├── QUICK_START.md            # Development & server setup
-    ├── BROWSER_AUTOMATION_AGENT.md  # Agent integration reference
-    └── KNOWLEDGE_EXTRACTION.md     # Knowledge pipeline reference
+
+---
+
+## ⚠️ CRITICAL: File Length Rules
+
+### Why These Rules Exist
+
+Large files (>500 lines) cause:
+- **Asyncio Errors**: `InvalidStateError`, `Result is not set` (evidence: `workflows_extraction.py` 1,427 lines caused errors)
+- **Maintainability Issues**: Hard to understand, debug, test, and review
+- **Temporal Workflow Issues**: Increased risk of non-deterministic behavior
+
+### Rules (NO EXCEPTIONS)
+
+1. **Maximum 500 lines** - Hard limit for all production Python files in `navigator/`
+2. **Warning at 400 lines** - Start planning split
+3. **Test files: 1000 lines max** - Still prefer splitting
+
+### Enforcement
+
+**Before adding code:**
+- Check: `wc -l <file_path>`
+- If >400 lines: Consider splitting
+- If >500 lines: **STOP** - Split immediately
+- If would exceed 500: Split first, then add code
+
+**Split strategies:**
+- By functionality (group related functions)
+- By phase (workflow phases)
+- By entity type (storage by entity)
+- By protocol/API (server files)
+- By action type (dispatchers)
+
+**Maintain backward compatibility:**
+- Use `__init__.py` to re-export public APIs
+- Update imports gradually
+- No breaking changes to public interfaces
+
+**See `dev-docs/FILE_SPLITTING_IMPLEMENTATION_PLAN.md` for detailed split strategies.**
+
+---
+
+## Code Organization
+
+### Core Principle: Separation of Concerns
+
+**Browser-Use (`browser_use/`)**: Embedded upstream library source
+- Keep clean and upgradeable
+- Don't modify unless absolutely necessary
+- Document any modifications
+
+**Our Extensions (`navigator/`)**: Our custom code
+- Full control and responsibility
+- Extend Browser-Use, don't modify it
+- Organize by feature area
+
+### Import Patterns
+
+**✅ DO:**
+```python
+from browser_use import BrowserSession
+from browser_use.browser.profile import BrowserProfile
 ```
+
+**❌ DON'T:**
+- Modify Browser-Use code directly
+- Mix our code into `browser_use/` directory
+- Hack Browser-Use internals
+
+### Extending vs Modifying
+
+**✅ Extend (Preferred):**
+- Create wrapper classes in `navigator/`
+- Use Browser-Use public APIs
+- Add new functionality via composition
+
+**⚠️ Modify (Only When Necessary):**
+- Document clearly in CHANGELOG.md
+- Use git branches for modifications
+- Consider upstream contribution
 
 ---
 
 ## Documentation Policy
 
-**CRITICAL**: We maintain exactly **3 comprehensive documentation files**:
+**CRITICAL**: Maintain exactly **3 canonical documentation files**:
 
-1. **`dev-docs/QUICK_START.md`** - Development setup and server operations
-2. **`dev-docs/BROWSER_AUTOMATION_AGENT.md`** - Agent integration, MCP tools, actions
-3. **`dev-docs/KNOWLEDGE_EXTRACTION.md`** - Knowledge extraction pipeline
+1. `dev-docs/QUICK_START.md` - Development setup
+2. `dev-docs/BROWSER_AUTOMATION_AGENT.md` - Agent integration
+3. `dev-docs/KNOWLEDGE_EXTRACTION.md` - Knowledge pipeline
 
-### Documentation Rules
-
-**❌ NEVER create new documentation files** unless explicitly requested by the user
-**❌ NEVER create README files** in subdirectories (examples, tests, etc.)
-**❌ NEVER create migration guides, quickstart files, or duplicate docs
-**✅ DO update the 3 canonical guides when making significant changes
-**✅ DO focus on schemas, contracts, and architectural details (not code examples)
-**✅ DO keep documentation concise and reference-focused
-
-When user makes changes:
-- Update relevant sections in the 3 guides
-- Do NOT create new documentation files
-- Do NOT add verbose code examples (schemas/contracts only)
+**Rules:**
+- ❌ NEVER create new documentation files (unless explicitly requested)
+- ❌ NEVER create README files in subdirectories
+- ✅ DO update existing docs when making changes
+- ✅ DO focus on schemas/contracts, not verbose code examples
 
 ---
 
-### 2. Import Patterns
+## Code Style
 
-**✅ DO: Import from Browser-Use**
+Follow Browser-Use conventions (see `CLAUDE.md`):
+
+- **Indentation**: Tabs (not spaces)
+- **Type Hints**: Python 3.12+ style (`str | None` not `Optional[str]`)
+- **Async**: Use `async`/`await` throughout
+- **Pydantic**: Use Pydantic v2 models
+- **Logging**: `logger = logging.getLogger(__name__)`
+
+### Import Organization
+
 ```python
-# In navigator/ files, import from browser_use
+# Standard library
+import asyncio
+import logging
+
+# Third-party
 from browser_use import BrowserSession
-from browser_use.browser.profile import BrowserProfile
-from browser_use.browser.events import NavigateToUrlEvent
-from browser_use.tools.service import Tools
+
+# Our code
+from navigator.action.command import ActionCommand
 ```
 
-**❌ DON'T: Modify Browser-Use imports directly in our code**
-```python
-# Don't do this - keep browser_use/ code unchanged
-from browser_use.browser.session import BrowserSession
-# Then modify BrowserSession in place
-```
+---
 
-### 3. Extending vs Modifying Browser-Use
+## Testing
 
-**✅ DO: Extend Browser-Use Components**
-- Create wrapper classes in `navigator/` that use Browser-Use components
-- Add new functionality in `navigator/` that imports and uses Browser-Use
-- Example: `ActionDispatcher` wraps `BrowserSession` and adds action command handling
-
-**✅ DO: Use Browser-Use APIs**
-- Use public APIs (BrowserSession, BrowserProfile, Tools, etc.)
-- Follow Browser-Use patterns and conventions
-- Leverage event-driven architecture
-
-**⚠️ AVOID: Direct Modifications to Browser-Use**
-- Avoid modifying `browser_use/` code directly unless absolutely necessary
-- If modification is needed, document it clearly and consider upstream contribution
-- Prefer extending/wrapping over modifying
-
-**❌ DON'T: Mix Our Code into Browser-Use**
-- Don't put our code in `browser_use/` directory
-- Don't modify Browser-Use core files without clear justification
-- Keep `browser_use/` as clean upstream code
+- **Our Tests**: `tests/ci/` with prefix `test_navigator_*`
+- **Integration Tests**: Test `navigator/` + `browser_use/` integration
+- **Validation**: `navigator/tests/validate_mvp.py`
 
 ---
 
 ## Browser-Use Upgrade Strategy
 
-### When Upgrading Browser-Use
+### When Upgrading
 
-1. **Identify Upgrade Source**
-   - Check Browser-Use repository for new versions
-   - Review changelog for breaking changes
-   - Identify new features/APIs we can use
+1. **Backup**: Commit all changes, create backup branch
+2. **Review**: Check changelog for breaking changes
+3. **Upgrade**: Git merge/rebase or directory replacement
+4. **Validate**: Run tests, check imports, verify no regressions
+5. **Document**: Update docs, document any required changes
 
-2. **Prepare for Upgrade**
-   - **Backup Current State**: Commit all changes to `navigator/` and `dev-docs/`
-   - **Check Dependencies**: Review `pyproject.toml` for version constraints
-   - **Review Breaking Changes**: Check Browser-Use migration guides
-   - **Document Custom Modifications**: List any changes made to `browser_use/` code
+### Tracking Modifications
 
-3. **Upgrade Process**
-   - **Option A: Git Merge/Rebase** (if forked from Browser-Use)
-     ```bash
-     git remote add upstream https://github.com/browser-use/browser-use.git
-     git fetch upstream
-     git merge upstream/main  # or rebase
-     ```
-   
-   - **Option B: Replace browser_use/ Directory**
-     ```bash
-     # Backup current browser_use/
-     cp -r browser_use/ browser_use.backup/
-     
-     # Replace with new version (from PyPI source or git clone)
-     # Then restore any custom modifications if needed
-     ```
+If modifying Browser-Use code:
+- Document in CHANGELOG.md (line, reason, impact)
+- Use git branches (`browser-use-modified`)
+- Pin version in `pyproject.toml` if upgrade path breaks
 
-4. **Post-Upgrade Validation**
-   - Run tests: `uv run pytest tests/ci/`
-   - Test navigator functionality: `uv run python navigator/tests/validate_mvp.py`
-   - Check imports: Verify all `navigator/` imports from `browser_use/` still work
-   - Review breaking changes: Update `navigator/` code if Browser-Use APIs changed
-   - Verify no regressions: Test all major flows (presentation, knowledge retrieval)
-
-5. **Document Changes**
-   - Update relevant sections in the 3 canonical documentation guides
-   - Document any required changes to `navigator/` code
-   - Update version in `pyproject.toml` to reflect new Browser-Use version
-   - Do NOT create new documentation files (migration guides, quickstarts, etc.)
-
-### Tracking Browser-Use Modifications
-
-If we **must** modify Browser-Use code:
-
-1. **Document in CHANGELOG.md**
-   ```markdown
-   ## Browser-Use Modifications
-   
-   ### browser_use/browser/session.py
-   - Modified: Line 123 - Added custom timeout handling
-   - Reason: Required for 6-hour session timeout
-   - Impact: Breaks upgrade compatibility
-   ```
-
-2. **Use Git Branches/Patches**
-   - Create branch: `browser-use-modified`
-   - Keep modifications minimal and documented
-   - Consider upstream contribution for generic changes
-
-3. **Version Pinning**
-   - Pin Browser-Use version in `pyproject.toml` if modifications break upgrade path
-   - Document why upgrade is blocked
-
-### Detailed Upgrade Process
-
-#### Step-by-Step Upgrade Guide
-
-**1. Pre-Upgrade Checklist**
-```bash
-# Ensure clean working directory
-git status  # Should be clean or all changes committed
-
-# Create backup branch
-git checkout -b backup-before-browser-use-upgrade
-git push origin backup-before-browser-use-upgrade
-
-# Document current version
-echo "Current Browser-Use version: $(grep '^version =' pyproject.toml)"
-```
-
-**2. Identify Target Version**
-- Check Browser-Use releases: https://github.com/browser-use/browser-use/releases
-- Review changelog for breaking changes
-- Identify new features that could benefit our codebase
-
-**3. Choose Upgrade Method**
-
-**Method A: Git Merge (Recommended if forked from Browser-Use)**
-```bash
-# Add upstream remote if not already added
-git remote add upstream https://github.com/browser-use/browser-use.git || true
-git fetch upstream
-
-# Create upgrade branch
-git checkout -b browser-use-upgrade-v0.12.0
-
-# Merge upstream changes
-git merge upstream/main  # or specific version tag
-
-# Resolve conflicts if any
-# Test thoroughly before merging to main
-```
-
-**Method B: Directory Replacement (If not forked)**
-```bash
-# Create upgrade branch
-git checkout -b browser-use-upgrade-v0.12.0
-
-# Backup current browser_use/
-cp -r browser_use/ browser_use.backup/
-
-# Clone new version
-git clone --depth 1 --branch v0.12.0 https://github.com/browser-use/browser-use.git browser_use_new
-
-# Replace directory
-rm -rf browser_use/
-mv browser_use_new/browser_use/ browser_use/
-
-# Restore any custom modifications from backup
-# (Compare and merge manually)
-```
-
-**4. Post-Upgrade Steps**
-```bash
-# Update dependencies
-uv sync
-
-# Run tests
-uv run pytest tests/ci/ -v
-
-# Check for import errors
-uv run python -c "from navigator.server.mcp import BrowserAutomationMCPServer; print('✅ Imports OK')"
-
-# Run validation
-uv run python navigator/tests/validate_mvp.py
-
-# Check for type errors
-uv run pyright navigator/
-
-# Update version in pyproject.toml
-# Update any breaking changes in navigator/ code
-```
-
-**5. Document Upgrade**
-- Create `dev-docs/UPGRADE_NOTES_v0.12.0.md` with:
-  - Breaking changes encountered
-  - Code changes required in `navigator/`
-  - New features available
-  - Performance improvements
-  - Known issues
-
-**6. Testing Checklist**
-- [ ] All existing tests pass
-- [ ] Navigator imports work correctly
-- [ ] Presentation flow works
-- [ ] Knowledge retrieval flow works
-- [ ] MCP server starts without errors
-- [ ] LiveKit streaming works
-- [ ] No regressions in functionality
+**See detailed upgrade process in original rules if needed.**
 
 ---
 
-## Development Best Practices
+## Git Workflow
 
-### 1. Code Style
+### Branching
+- `main` - Stable code
+- `feature/*` - New features
+- `browser-use-upgrade` - Browser-Use upgrades
+- `browser-use-modified` - If modifying Browser-Use
 
-Follow Browser-Use conventions (as defined in `CLAUDE.md`):
-
-- **Indentation**: Use **tabs** (not spaces) for Python code
-- **Type Hints**: Use modern Python 3.12+ typing (`str | None` not `Optional[str]`)
-- **Async**: Use `async`/`await` throughout
-- **Pydantic**: Use Pydantic v2 models for data structures
-- **Logging**: Use `logger = logging.getLogger(__name__)` pattern
-
-### 2. File Organization
-
-**Our Code (`navigator/`):**
-- Keep related functionality together
-- Use descriptive file names
-- Follow single-responsibility principle
-- Document public APIs
-- Organize by feature area (action, session, streaming, knowledge, etc.)
-
-**Browser-Use Code (`browser_use/`):**
-- Don't modify unless necessary
-- If modifying, document why
-- Keep modifications minimal
-
-### 3. Testing
-
-- **Our Tests**: Put tests for `navigator/` code in `tests/ci/` with prefix `test_navigator_*`
-- **Integration Tests**: Test `navigator/` + `browser_use/` integration
-- **Validation Scripts**: Use `navigator/tests/validate_mvp.py` for validation
-
-### 4. Documentation
-
-**CRITICAL**: We maintain exactly 3 canonical documentation files:
-- **`dev-docs/QUICK_START.md`**: Development setup and server operations
-- **`dev-docs/BROWSER_AUTOMATION_AGENT.md`**: Agent integration, MCP tools, browser actions
-- **`dev-docs/KNOWLEDGE_EXTRACTION.md`**: Knowledge extraction pipeline, Temporal workflows
-
-**Never create additional documentation files.** Update these 3 guides only.
-
-### 5. Dependencies
-
-- **Browser-Use Dependencies**: Manage in `pyproject.toml` (inherited)
-- **Our Dependencies**: Add to `pyproject.toml` under `[project.dependencies]`
-- **Version Management**: Use `uv` for dependency management (not `pip`)
-
-### 6. Import Organization
-
-**In `navigator/` files:**
-```python
-# Standard library
-import asyncio
-import logging
-from typing import Any
-
-# Third-party
-from browser_use import BrowserSession  # Browser-Use imports
-from browser_use.browser.profile import BrowserProfile
-
-# Our code
-from navigator.action.command import ActionCommand, ActionType
-from navigator.action.dispatcher import ActionDispatcher
+### Commit Messages
+```
+feat(navigator): Add feature
+fix(navigator): Fix bug
+docs(dev-docs): Update docs
+upgrade(browser-use): Upgrade to v0.12.0
 ```
 
-### 7. Error Handling
-
-- Use Browser-Use exception types when appropriate
-- Create custom exceptions in `navigator/` if needed
-- Document error scenarios
-
-### 8. Logging
-
-- Use structured logging with levels (DEBUG, INFO, WARNING, ERROR)
-- Log at appropriate levels:
-  - DEBUG: Detailed execution flow
-  - INFO: Important state changes
-  - WARNING: Recoverable issues
-  - ERROR: Failures requiring attention
+### Before Committing
+1. ✅ Run tests: `uv run pytest tests/ci/`
+2. ✅ Run validation: `uv run python navigator/tests/validate_mvp.py`
+3. ✅ Lint: `uv run ruff check --fix`
+4. ✅ Type check: `uv run pyright`
+5. ✅ Verify imports work
+6. ✅ No accidental `browser_use/` modifications
 
 ---
 
 ## Common Patterns
 
-### Pattern 1: Wrapper Class
-
+### Wrapper Class
 ```python
-# navigator/session/manager.py
-from browser_use import BrowserSession
-from browser_use.browser.profile import BrowserProfile
-
 class BrowserSessionManager:
-    """Wrapper around BrowserSession with our custom logic."""
-    
     def __init__(self):
         self.sessions: dict[str, BrowserSession] = {}
     
     async def start_session(self, room_name: str, **kwargs):
-        # Use BrowserSession, don't modify it
         browser_session = BrowserSession(**kwargs)
         await browser_session.start()
         self.sessions[room_name] = browser_session
 ```
 
-### Pattern 2: Event Handler Extension
-
+### Event Handler Extension
 ```python
-# navigator/action/dispatcher.py
-from browser_use import BrowserSession
-from browser_use.browser.events import ClickElementEvent
-
 class ActionDispatcher:
-    """Dispatches actions using Browser-Use events."""
-    
     def __init__(self, browser_session: BrowserSession):
-        self.browser_session = browser_session  # Use, don't modify
+        self.browser_session = browser_session
     
     async def execute_click(self, index: int):
-        # Use Browser-Use events
         event = self.browser_session.event_bus.dispatch(
             ClickElementEvent(index=index)
         )
         await event
 ```
 
-### Pattern 3: Service Composition
-
-```python
-# navigator/server/mcp.py
-from browser_use import BrowserSession
-from navigator.session.manager import BrowserSessionManager
-from navigator.action.dispatcher import ActionDispatcher
-
-class BrowserAutomationMCPServer:
-    """Composes our services with Browser-Use."""
-    
-    def __init__(self):
-        # Our services
-        self.session_manager = BrowserSessionManager()
-        # Uses BrowserSession internally
-```
-
 ---
 
-## Git Workflow
-
-### Branching Strategy
-
-- **main**: Stable code with working service
-- **feature/***: New features in `navigator/`
-- **browser-use-upgrade**: Browser-Use upgrades
-- **browser-use-modified**: If we modify Browser-Use code
-
-### Commit Messages
-
-Follow conventional commits:
-```
-feat(navigator): Add presentation flow manager
-fix(navigator): Fix action dispatcher timeout handling
-docs(dev-docs): Update architecture documentation
-upgrade(browser-use): Upgrade to Browser-Use v0.12.0
-```
-
-### Before Committing
-
-1. ✅ Run tests: `uv run pytest tests/ci/`
-2. ✅ Run validation: `uv run python navigator/tests/validate_mvp.py`
-3. ✅ Check code style: `uv run ruff check --fix`
-4. ✅ Check types: `uv run pyright`
-5. ✅ Verify imports: All `navigator/` imports from `browser_use/` work
-6. ✅ Review changes: No accidental modifications to `browser_use/`
-
----
-
-## When to Modify Browser-Use vs Extend
-
-### ✅ Extend (Preferred)
-
-- Adding new functionality
-- Customizing behavior
-- Adding new actions/events
-- Integrating with external services (LiveKit, MCP)
-
-### ⚠️ Modify (Only When Necessary)
-
-- Performance optimizations specific to our use case
-- Bug fixes that can't wait for upstream
-- Critical features not available upstream
-
-### ❌ Don't Modify
-
-- Standard functionality that works fine
-- Code that's actively maintained upstream
-- Features that could be contributed upstream
-
----
-
-## Quick Reference
-
-### Common Commands
-
-```bash
-# Run tests
-uv run pytest tests/ci/
-
-# Validate navigator functionality
-uv run python navigator/tests/validate_mvp.py
-
-# Check code style
-uv run ruff check --fix
-uv run ruff format
-
-# Check types
-uv run pyright
-
-# Start server
-uv run python navigator/start_server.py
-
-# Install dependencies
-uv sync
-```
-
-### Important Files
-
-- **Our Code**: `navigator/**/*.py`
-- **Browser-Use Code**: `browser_use/**/*.py`
-- **Our Docs**: `dev-docs/*.md`
-- **Dependencies**: `pyproject.toml`
-- **Configuration**: `.env` (not committed)
-
-### Key Principles
+## Key Principles
 
 1. ✅ Keep `navigator/` and `browser_use/` separate
 2. ✅ Extend, don't modify Browser-Use when possible
-3. ✅ Document Browser-Use modifications if needed
-4. ✅ Test after Browser-Use upgrades
-5. ✅ Use Browser-Use APIs, don't hack internals
-6. ✅ Follow Browser-Use code style conventions
-7. ✅ Keep upgrade path clear
-8. ✅ Treat `browser_use/` as embedded source (not external dependency)
+3. ✅ Maximum 500 lines per file (hard limit)
+4. ✅ Use `uv` for dependency management
+5. ✅ Follow Browser-Use code style conventions
+6. ✅ Maintain only 3 canonical documentation files
+7. ✅ Test after Browser-Use upgrades
+8. ✅ Check file length before adding code
 
 ---
 
-## Architecture Approach
+## Python Best Practices
 
-### Current Setup: Embedded Source with Extension Boundaries
+### General Python Principles
 
-**What We're Doing:**
-- **`browser_use/`**: Embedded source code of Browser-Use library (version 0.11.2)
-- **`navigator/`**: Our extensions that import `browser_use` as a library
-- **Import Pattern**: `navigator/` code imports from `browser_use` like: `from browser_use import BrowserSession`
+- **Write concise, technical responses** with accurate Python examples
+- **Prioritize readability and maintainability** - follow PEP 8 style guidelines
+- **Use functional programming** where appropriate; avoid unnecessary classes
+- **Prefer vectorized operations** over explicit loops for better performance (when using pandas/numpy)
+- **Use descriptive variable names** that reflect the data they contain
+- **Follow modern Python typing** - Python 3.12+ style (`str | None` not `Optional[str]`)
 
-**Why This Approach:**
-- ✅ **Full Source Access**: Can debug and optimize Browser-Use internals directly
-- ✅ **Clear Boundaries**: `navigator/` extends without modifying `browser_use/`
-- ✅ **Performance**: No abstraction overhead, direct access to source
-- ✅ **Flexibility**: Can modify `browser_use/` if needed (with documentation)
-- ✅ **Upgrade Path**: Can upgrade `browser_use/` directory via git merge/replace
+### Error Handling and Validation
 
-**Alternative Approaches Considered:**
-- ❌ **External Library (PyPI)**: Would lose source access and debugging capability
-- ❌ **Embed navigator into browser_use**: Would mix concerns and complicate upstream contributions
+**Prioritize error handling and edge cases:**
+- Handle errors and edge cases at the beginning of functions
+- Use early returns for error conditions to avoid deeply nested if statements
+- Place the happy path last in the function for improved readability
+- Avoid unnecessary else statements; use the if-return pattern instead
+- Use guard clauses to handle preconditions and invalid states early
+- Implement proper error logging and user-friendly error messages
+- Use custom error types or error factories for consistent error handling
+
+**Pattern:**
+```python
+async def process_data(data: dict[str, Any]) -> Result:
+	# Guard clauses first
+	if not data:
+		raise ValueError("Data cannot be empty")
+	
+	if "required_field" not in data:
+		raise ValueError("Missing required_field")
+	
+	# Happy path last
+	return process_valid_data(data)
+```
+
+### Performance Optimization
+
+- **Minimize blocking I/O operations** - use asynchronous operations for all database calls and external API requests
+- **Use vectorized operations** in pandas and numpy for improved performance
+- **Implement caching** for static and frequently accessed data using tools like Redis or in-memory stores
+- **Optimize data serialization** and deserialization with Pydantic
+- **Use lazy loading techniques** for large datasets and substantial API responses
+- **Profile code** to identify and optimize bottlenecks
+
+### Data Analysis and Manipulation
+
+When working with data analysis tasks:
+- Use pandas for data manipulation and analysis
+- Prefer method chaining for data transformations when possible
+- Use `loc` and `iloc` for explicit data selection
+- Utilize `groupby` operations for efficient data aggregation
+- Implement data quality checks at the beginning of analysis
+- Handle missing data appropriately (imputation, removal, or flagging)
+
+### Async/Await Best Practices
+
+- Use `async def` for asynchronous operations (I/O-bound tasks)
+- Use `def` for synchronous operations (CPU-bound tasks)
+- Leverage `asyncio` for concurrent operations
+- Use connection pooling for database connections
+- Implement proper async context managers for resource cleanup
 
 ---
 
-## Summary
+## FastAPI Guidelines
 
-**Core Philosophy**: 
-- **Browser-Use** (`browser_use/`) = Embedded upstream library source (keep clean, upgradeable)
-- **Our Extensions** (`navigator/`) = Our custom code (full control, our responsibility)
+When building REST APIs with FastAPI:
 
-**Key Rule**: 
-> Prefer extending Browser-Use in `navigator/` over modifying `browser_use/` directly. Only modify `browser_use/` when absolutely necessary, and document it clearly.
+### Core Principles
+- Use functional, declarative programming; avoid classes where possible
+- Use type hints for all function signatures
+- Prefer Pydantic v2 models over raw dictionaries for input validation
+- Use `async def` for asynchronous operations and `def` for synchronous ones
+- Follow the Receive an Object, Return an Object (RORO) pattern
 
-**Upgrade Path**: 
-> Keep `browser_use/` code clean and upgradeable. When upgrading, validate all `navigator/` code still works with new Browser-Use version. Use git merge/replace strategy to upgrade the `browser_use/` directory.
+### FastAPI-Specific Guidelines
+- Use functional components (plain functions) and Pydantic models for input validation and response schemas
+- Use declarative route definitions with clear return type annotations
+- Minimize `@app.on_event("startup")` and `@app.on_event("shutdown")`; prefer lifespan context managers
+- Use middleware for logging, error monitoring, and performance optimization
+- Use `HTTPException` for expected errors and model them as specific HTTP responses
+- Use Pydantic's `BaseModel` for consistent input/output validation and response schemas
+
+### Performance
+- Minimize blocking I/O operations; use asynchronous operations for all database calls and external API requests
+- Implement caching for static and frequently accessed data
+- Optimize data serialization and deserialization with Pydantic
+- Use lazy loading techniques for large datasets
+
+---
+
+## Django Guidelines
+
+When working with Django (if needed for future features):
+
+### Core Principles
+- Use Django's built-in features and tools wherever possible
+- Follow Django's coding style guide (PEP 8 compliance)
+- Structure project in a modular way using Django apps
+- Use descriptive variable and function names; adhere to naming conventions
+
+### Django-Specific Guidelines
+- Use Django's class-based views (CBVs) for more complex views; prefer function-based views (FBVs) for simpler logic
+- Leverage Django's ORM for database interactions; avoid raw SQL queries unless necessary
+- Use Django's built-in user model and authentication framework
+- Utilize Django's form and model form classes for form handling and validation
+- Follow the MVT (Model-View-Template) pattern strictly
+- Use middleware judiciously to handle cross-cutting concerns
+
+### Performance Optimization
+- Optimize query performance using Django ORM's `select_related` and `prefetch_related`
+- Use Django's cache framework with backend support (e.g., Redis or Memcached)
+- Implement database indexing and query optimization techniques
+- Use asynchronous views and background tasks (via Celery) for I/O-bound operations
+
+---
+
+## Flask Guidelines
+
+When working with Flask (if needed for future features):
+
+### Core Principles
+- Use functional, declarative programming; avoid classes where possible except for Flask views
+- Use Flask application factories for better modularity and testing
+- Organize routes using Flask Blueprints for better code organization
+
+### Flask-Specific Guidelines
+- Use Flask-RESTful for building RESTful APIs with class-based views
+- Implement custom error handlers for different types of exceptions
+- Use Flask's `before_request`, `after_request`, and `teardown_request` decorators for request lifecycle management
+- Utilize Flask extensions for common functionalities (e.g., Flask-SQLAlchemy, Flask-Migrate)
+- Use Flask's config object for managing different configurations
+- Implement proper logging using Flask's `app.logger`
+
+---
+
+## Package Management with `uv`
+
+**✅ Use `uv` exclusively** (already enforced in project rules)
+
+### Managing Dependencies
+
+Always use these commands:
+```bash
+# Add or upgrade dependencies
+uv add <package>
+
+# Remove dependencies
+uv remove <package>
+
+# Reinstall all dependencies from lock file
+uv sync
+```
+
+### Running Scripts
+
+```bash
+# Run script with proper dependencies
+uv run script.py
+```
+
+### Inline Script Metadata
+
+You can edit inline-metadata manually:
+```python
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "torch",
+#     "numpy",
+# ]
+# ///
+print("some python code")
+```
+
+Or using uv CLI:
+```bash
+# Add or upgrade script dependencies
+uv add package-name --script script.py
+
+# Remove script dependencies
+uv remove package-name --script script.py
+
+# Reinstall all script dependencies from lock file
+uv sync --script script.py
+```
+
+---
+
+## Web Scraping Best Practices
+
+When implementing web scraping functionality:
+
+### General Principles
+- Use requests for simple HTTP GET/POST requests to static websites
+- Parse HTML content with BeautifulSoup for efficient data extraction
+- Handle JavaScript-heavy websites with selenium or headless browsers
+- Respect website terms of service and use proper request headers (e.g., User-Agent)
+- Implement rate limiting and random delays to avoid triggering anti-bot measures
+
+### Error Handling
+- Implement robust error handling for common issues:
+  - Connection timeouts (`requests.Timeout`)
+  - Parsing errors (`BeautifulSoup.FeatureNotFound`)
+  - Dynamic content issues (Selenium element not found)
+- Retry failed requests with exponential backoff to prevent overloading servers
+- Log errors and maintain detailed error messages for debugging
+
+### Performance
+- Optimize data parsing by targeting specific HTML elements (e.g., id, class, or XPath)
+- Use asyncio or concurrent.futures for concurrent scraping
+- Implement caching for repeated requests using libraries like requests-cache
+- Profile and optimize code using tools like cProfile or line_profiler
+
+---
+
+## Testing Best Practices
+
+### General Testing Principles
+- Write unit tests using pytest
+- Use pytest fixtures for test setup and teardown
+- Implement test fixtures for database and application setup
+- Test edge cases and error conditions
+- Use mocking judiciously - prefer real objects when possible (as per project rules)
+
+### Test Organization
+- Keep tests focused and modular
+- Use descriptive test names that explain what is being tested
+- Group related tests in classes or modules
+- Use parametrized tests for testing multiple scenarios
+
+### Async Testing
+- Use `pytest-asyncio` for async test functions
+- Modern pytest-asyncio: No `@pytest.mark.asyncio` decorator needed on async test functions
+- Use `loop = asyncio.get_event_loop()` inside tests that need it
+- Fixture functions (even async ones) only need `@pytest.fixture` decorator
+
+---
+
+## Deep Learning / ML Guidelines
+
+When working with machine learning or deep learning:
+
+### PyTorch Best Practices
+- Use PyTorch as the primary framework for deep learning tasks
+- Implement custom `nn.Module` classes for model architectures
+- Utilize PyTorch's autograd for automatic differentiation
+- Implement proper weight initialization and normalization techniques
+- Use appropriate loss functions and optimization algorithms
+
+### Model Training
+- Implement efficient data loading using PyTorch's DataLoader
+- Use proper train/validation/test splits and cross-validation when appropriate
+- Implement early stopping and learning rate scheduling
+- Use appropriate evaluation metrics for the specific task
+- Implement gradient clipping and proper handling of NaN/Inf values
+
+### Performance
+- Utilize DataParallel or DistributedDataParallel for multi-GPU training
+- Implement gradient accumulation for large batch sizes
+- Use mixed precision training with `torch.cuda.amp` when appropriate
+- Profile code to identify and optimize bottlenecks
+
+---
+
+## Security Best Practices
+
+### Input Validation
+- Sanitize all external inputs
+- Never invoke shell commands with unsanitized strings
+- Use secure defaults (e.g., TLSv1.2+, strong cipher suites)
+- Validate data types and ranges to ensure data integrity
+
+### Secrets Management
+- Ensure secrets (API keys, credentials) are loaded from secure stores or environment variables
+- Never hardcode credentials in source code
+- Use environment variables or secure configuration management
+
+### API Security
+- Implement rate limiting and back-off for network operations
+- Use proper authentication and authorization mechanisms
+- Apply security headers (e.g., CORS, CSP)
+- Implement content validation using security tools
 
 ---
 
 *Last Updated: 2025*
-*Version: 1.0.0*
+*Version: 2.1.0*

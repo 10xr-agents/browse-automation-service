@@ -50,7 +50,7 @@ class BrowserSessionManager:
 		"""
 		self.sessions: dict[str, BrowserSessionInfo] = {}
 		self.event_broadcaster = event_broadcaster
-		
+
 		# Sequenced communication components (optional, initialized lazily)
 		self._state_diff_engine: Any | None = None
 		self._state_publisher: Any | None = None
@@ -187,19 +187,19 @@ class BrowserSessionManager:
 		# Capture action_dispatcher in closure
 		_dispatcher = action_dispatcher
 		_room = room_name
-		
+
 		async def on_navigation_complete(event: NavigationCompleteEvent) -> None:
 			"""Handle navigation complete events."""
 			logger.debug(f'[SessionManager] Navigation complete event: {event.url}')
-			
+
 			# Broadcast page navigation event
 			if self.event_broadcaster:
 				await self.event_broadcaster.broadcast_page_navigation(_room, event.url)
-			
+
 			# Wait a bit for page to fully settle, then broadcast page_load_complete
 			# Check ready state after navigation
 			await asyncio.sleep(0.5)  # Small delay to let page settle
-			
+
 			try:
 				context = await _dispatcher.get_browser_context()
 				if context.ready_state == 'complete':
@@ -215,11 +215,11 @@ class BrowserSessionManager:
 		async def on_browser_error(event: BrowserErrorEvent) -> None:
 			"""Handle browser error events."""
 			logger.error(f'[SessionManager] Browser error event: {event.message}')
-			
+
 			# Broadcast browser error event
 			if self.event_broadcaster:
 				await self.event_broadcaster.broadcast_browser_error(_room, event.message)
-			
+
 			# Mark session as inactive
 			session = self.sessions.get(_room)
 			if session:
@@ -315,31 +315,31 @@ class BrowserSessionManager:
 				del self.sessions[room_name]
 
 		return {'status': 'closed', 'room_name': room_name}
-	
+
 	def _init_sequenced_components(self) -> None:
 		"""Initialize sequenced communication components (lazy initialization)."""
 		if self._state_diff_engine is not None:
 			return  # Already initialized
-		
+
 		try:
 			from navigator.state.dedup_cache import DedupCache
 			from navigator.state.diff_engine import StateDiffEngine
 			from navigator.state.sequence_tracker import SequenceTracker
-			
+
 			# Initialize components
 			self._state_diff_engine = StateDiffEngine()
 			self._sequence_tracker = SequenceTracker()
 			self._dedup_cache = DedupCache(ttl_seconds=300)  # 5 minutes TTL
-			
+
 			# Initialize Redis client for streams (async, so we'll initialize it when needed)
 			# For now, set to None - will be initialized async when needed
 			self._redis_streams_client = None
 			self._state_publisher = None
-			
+
 			logger.debug("Sequenced communication components initialized")
 		except ImportError as e:
 			logger.debug(f"Sequenced communication components not available: {e}")
-	
+
 	async def _get_redis_streams_client(self) -> Any | None:
 		"""Get Redis async client for streams (lazy initialization)."""
 		if self._redis_streams_client is None:
@@ -353,50 +353,50 @@ class BrowserSessionManager:
 			except Exception as e:
 				logger.debug(f"Redis streams client not available: {e}")
 		return self._redis_streams_client
-	
+
 	def get_state_diff_engine(self) -> Any | None:
 		"""Get StateDiffEngine instance (lazy initialization)."""
 		self._init_sequenced_components()
 		return self._state_diff_engine
-	
+
 	def get_sequence_tracker(self) -> Any | None:
 		"""Get SequenceTracker instance (lazy initialization)."""
 		self._init_sequenced_components()
 		return self._sequence_tracker
-	
+
 	def get_dedup_cache(self) -> Any | None:
 		"""Get DedupCache instance (lazy initialization)."""
 		self._init_sequenced_components()
 		return self._dedup_cache
-	
+
 	async def get_state_publisher(self) -> Any | None:
 		"""Get StatePublisher instance (lazy initialization, requires Redis)."""
 		self._init_sequenced_components()
 		if self._state_publisher is None:
 			await self._get_redis_streams_client()  # This will initialize state_publisher
 		return self._state_publisher
-	
+
 	async def _get_command_consumer(self) -> Any | None:
 		"""Get or create CommandConsumer instance (lazy initialization, singleton per manager)."""
 		if self._command_consumer is None:
 			try:
 				from navigator.streaming.command_consumer_factory import create_command_consumer
-				
+
 				# Create CommandConsumer using factory (handles all component initialization)
 				self._command_consumer = await create_command_consumer(
 					session_manager=self,
 					consumer_group="browser_agent_cluster",
 				)
-				
+
 				if self._command_consumer:
 					logger.info("CommandConsumer created and ready")
 				else:
 					logger.debug("CommandConsumer not available (Redis/components not configured)")
 			except Exception as e:
 				logger.debug(f"CommandConsumer not available: {e}")
-		
+
 		return self._command_consumer
-	
+
 	async def _start_command_consumer(self, session_id: str) -> None:
 		"""Start CommandConsumer for a session (if available)."""
 		try:
@@ -409,7 +409,7 @@ class BrowserSessionManager:
 		except Exception as e:
 			logger.warning(f"Failed to start CommandConsumer for session {session_id}: {e}")
 			# Don't fail session start if CommandConsumer fails
-	
+
 	async def _stop_command_consumer(self, session_id: str) -> None:
 		"""Stop CommandConsumer for a session (if running)."""
 		try:
