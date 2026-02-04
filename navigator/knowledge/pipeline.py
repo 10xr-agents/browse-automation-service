@@ -450,7 +450,7 @@ class KnowledgePipeline:
 		self,
 		actions: list[Any],  # list[ActionDefinition]
 		transitions: list[Any]  # list[TransitionDefinition]
-	) -> list[ActionGap]:
+	) -> list[Any]:  # Returns list[ActionGap] - imported inside method
 		"""
 		Identify gaps in action sequences.
 		

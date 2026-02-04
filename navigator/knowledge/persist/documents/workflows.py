@@ -61,18 +61,14 @@ async def save_workflow(
 		from navigator.knowledge.persist.cross_references import get_cross_reference_manager
 		cross_ref_manager = get_cross_reference_manager()
 
-		# Link workflow to business function if business_function_id is set
+		# Phase 3.1: Link workflow to business function if business_function_id is set (bidirectional)
 		if hasattr(workflow, 'business_function_id') and workflow.business_function_id:
-			bf_collection = await get_business_functions_collection()
-			if bf_collection:
-				await bf_collection.update_one(
-					{
-						'business_function_id': workflow.business_function_id,
-						'knowledge_id': knowledge_id
-					} if knowledge_id else {'business_function_id': workflow.business_function_id},
-					{'$addToSet': {'related_workflows': workflow.workflow_id}},
-					upsert=False
-				)
+			await cross_ref_manager.link_entity_to_business_function(
+				'workflow',
+				workflow.workflow_id,
+				workflow.business_function_id,
+				knowledge_id
+			)
 
 		# Link workflow to screens if screen_ids are set
 		if hasattr(workflow, 'screen_ids') and workflow.screen_ids:

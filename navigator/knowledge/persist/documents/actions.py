@@ -46,6 +46,25 @@ async def save_action(
 		if job_id:
 			action_dict['job_id'] = job_id
 
+		# Sync delay intelligence if available (from DelayTracker) - do this BEFORE saving
+		if action.delay_intelligence is None:
+			try:
+				from navigator.knowledge.delay_intelligence_sync import get_delay_intelligence_for_action
+				# Get delay intelligence directly (non-blocking, won't fail if not available)
+				delay_intel = get_delay_intelligence_for_action(action.action_id, min_samples=1)
+				if delay_intel:
+					action.delay_intelligence = delay_intel
+					action_dict['delay_intelligence'] = delay_intel
+					# Also update cost in metadata
+					if 'cost' not in action.metadata:
+						action.metadata['cost'] = {}
+					action.metadata['cost']['estimated_ms'] = delay_intel['recommended_wait_time_ms']
+					action.metadata['cost']['actual_avg_ms'] = delay_intel['average_delay_ms']
+					action.metadata['cost']['confidence'] = delay_intel['confidence']
+					action_dict['metadata']['cost'] = action.metadata['cost']
+			except Exception as e:
+				logger.debug(f"Could not get delay intelligence for action {action.action_id}: {e}")
+		
 		# Upsert by action_id
 		await collection.update_one(
 			{'action_id': action.action_id},
@@ -63,6 +82,16 @@ async def save_action(
 				await cross_ref_manager.link_screen_to_action(
 					screen_id,
 					action.action_id,
+					knowledge_id
+				)
+
+		# Phase 3.1: Link action to business functions
+		if hasattr(action, 'business_function_ids') and action.business_function_ids:
+			for bf_id in action.business_function_ids:
+				await cross_ref_manager.link_entity_to_business_function(
+					'action',
+					action.action_id,
+					bf_id,
 					knowledge_id
 				)
 

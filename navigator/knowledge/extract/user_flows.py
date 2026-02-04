@@ -144,15 +144,19 @@ class UserFlowExtractor:
 		workflows: list[Any],  # OperationalWorkflow
 		business_functions: list[Any],  # BusinessFunction
 		transitions: list[Any],  # TransitionDefinition
+		actions: list[Any] | None = None,  # ActionDefinition - Phase 3.3: Added for action mapping
 	) -> UserFlowExtractionResult:
 		"""
 		Extract user flows by synthesizing screens, workflows, business functions, and transitions.
+		
+		Phase 3.3: Enhanced to accept actions for complete action sequence mapping.
 		
 		Args:
 			screens: List of screen definitions
 			workflows: List of operational workflows
 			business_functions: List of business functions
 			transitions: List of transition definitions
+			actions: Optional list of action definitions (Phase 3.3: for action ID mapping)
 		
 		Returns:
 			UserFlowExtractionResult with synthesized user flows
@@ -173,10 +177,10 @@ class UserFlowExtractor:
 				logger.warning("No relevant knowledge found for user flow extraction")
 				return result
 
-			# Extract user flows using LLM
+			# Phase 3.3: Extract user flows using LLM (with actions for proper mapping)
 			user_flows = await self._extract_with_llm(
 				combined_context,
-				screens, workflows, business_functions, transitions
+				screens, workflows, business_functions, transitions, actions
 			)
 			result.user_flows = user_flows
 
@@ -287,6 +291,7 @@ class UserFlowExtractor:
 		workflows: list[Any],
 		business_functions: list[Any],
 		transitions: list[Any],
+		actions: list[Any] | None = None,  # Phase 3.3: Added for action mapping
 	) -> list[UserFlow]:
 		"""Extract user flows using OpenAI or Gemini LLM."""
 		user_flows = []
@@ -405,34 +410,74 @@ Return ONLY valid JSON, no markdown formatting."""
 				else:
 					flows_data = []
 
-				# Match screens, workflows, transitions by name to get IDs
+				# Phase 3.3: Match screens, workflows, transitions, and actions by name to get IDs
 				screen_map = {s.name: s.screen_id for s in screens}
 				workflow_map = {w.name: w.workflow_id for w in workflows}
 				business_function_map = {bf.name: bf.business_function_id for bf in business_functions}
-				transition_map = {}  # Would need more sophisticated matching
+				
+				# Phase 3.3: Build action map for action name to ID mapping
+				action_map = {}
+				if actions:
+					for action in actions:
+						# Map by action name
+						if hasattr(action, 'name'):
+							action_map[action.name.lower()] = action.action_id
+						# Also map by action type for common actions
+						if hasattr(action, 'action_type'):
+							action_key = f"{action.action_type}".lower()
+							if action_key not in action_map:
+								action_map[action_key] = action.action_id
 
 				for flow_data in flows_data:
-					# Resolve screen IDs and workflow IDs from names
+					# Phase 3.3: Resolve screen IDs, workflow IDs, and action IDs from names
 					steps = []
 					for step_data in flow_data.get('steps', []):
 						screen_id = screen_map.get(step_data.get('screen_name'))
+						
+						# Phase 3.3: Map action name to action ID
+						action_name = step_data.get('action', '').lower()
+						action_id = None
+						if actions:
+							# Try exact match first
+							action_id = action_map.get(action_name)
+							# Try partial match if exact match fails
+							if not action_id:
+								for action in actions:
+									if hasattr(action, 'name') and action_name in action.name.lower():
+										action_id = action.action_id
+										break
+									# Also check action type
+									if hasattr(action, 'action_type') and action_name in action.action_type.lower():
+										action_id = action.action_id
+										break
+						
 						flow_step = FlowStep(
 							step_number=step_data.get('step_number', 0),
 							screen_name=step_data.get('screen_name', ''),
 							screen_id=screen_id,
 							action=step_data.get('action', ''),
-							action_id=None,  # Would need action name mapping
-							transition_id=None,
+							action_id=action_id,  # Phase 3.3: Now properly mapped
+							transition_id=None,  # Will be set in next loop
 							description=step_data.get('description', ''),
 							user_goal=step_data.get('user_goal'),
 							business_function=step_data.get('business_function'),
 						)
 						steps.append(flow_step)
 
-					# Collect related entity IDs
-					related_screens = [s.screen_id for s in screens if s.name in [step.screen_name for step in steps]]
+					# Phase 3.3: Collect related entity IDs (enhanced to ensure completeness)
+					related_screens = list(set([step.screen_id for step in steps if step.screen_id]))  # Deduplicate
+					# Also include screens from screen_sequence
+					screen_ids_from_steps = [step.screen_id for step in steps if step.screen_id]
+					related_screens = list(set(related_screens + screen_ids_from_steps))
+					
 					related_workflows = [w.workflow_id for w in workflows if w.name == flow_data.get('business_function') or any(step.business_function == w.name for step in steps)]
 					related_business_functions = [bf.business_function_id for bf in business_functions if bf.name == flow_data.get('business_function')]
+					# Phase 3.3: Also include business functions from steps
+					for step in steps:
+						if step.business_function:
+							bf_id = business_function_map.get(step.business_function)
+							if bf_id and bf_id not in related_business_functions:
+								related_business_functions.append(bf_id)
 
 					# Build screen_sequence with transitions (Phase 4 enhancement)
 					screen_sequence = []
@@ -449,7 +494,7 @@ Return ONLY valid JSON, no markdown formatting."""
 							transition_map[key] = []
 						transition_map[key].append(trans)
 
-					# Build sequence from steps
+					# Phase 3.3: Build complete sequence from steps (enhanced)
 					for i, step in enumerate(steps):
 						if step.screen_id:
 							# Find transition to next screen
@@ -459,12 +504,20 @@ Return ONLY valid JSON, no markdown formatting."""
 								transitions_for_step = transition_map.get((step.screen_id, next_screen_id), [])
 								if transitions_for_step:
 									transition_id = transitions_for_step[0].transition_id
-									related_transitions.append(transition_id)
-									# Get action from transition
+									if transition_id not in related_transitions:
+										related_transitions.append(transition_id)
+									# Phase 3.3: Get action from transition (enhanced)
 									if transitions_for_step[0].action_id:
-										related_actions.append(transitions_for_step[0].action_id)
+										if transitions_for_step[0].action_id not in related_actions:
+											related_actions.append(transitions_for_step[0].action_id)
 									elif transitions_for_step[0].triggered_by and transitions_for_step[0].triggered_by.element_id:
-										related_actions.append(transitions_for_step[0].triggered_by.element_id)
+										action_id = transitions_for_step[0].triggered_by.element_id
+										if action_id not in related_actions:
+											related_actions.append(action_id)
+							
+							# Phase 3.3: Also add action from step if available
+							if step.action_id and step.action_id not in related_actions:
+								related_actions.append(step.action_id)
 
 							screen_sequence.append({
 								'screen_id': step.screen_id,
@@ -473,11 +526,17 @@ Return ONLY valid JSON, no markdown formatting."""
 								'order': step.step_number
 							})
 
-							# Track entry/exit actions
-							if i == 0 and transition_id:
-								entry_actions.append(transition_id)
-							if i == len(steps) - 1 and transition_id:
-								exit_actions.append(transition_id)
+							# Phase 3.3: Track entry/exit actions (enhanced)
+							if i == 0:
+								# Entry actions: first step's action or transition action
+								if step.action_id and step.action_id not in entry_actions:
+									entry_actions.append(step.action_id)
+								if transition_id and transition_id not in entry_actions:
+									entry_actions.append(transition_id)
+							if i == len(steps) - 1:
+								# Exit actions: last step's action
+								if step.action_id and step.action_id not in exit_actions:
+									exit_actions.append(step.action_id)
 
 					# Get entry and exit screen IDs
 					entry_screen_id = screen_map.get(flow_data.get('entry_screen', ''))
@@ -493,16 +552,16 @@ Return ONLY valid JSON, no markdown formatting."""
 						entry_screen=flow_data.get('entry_screen', ''),
 						exit_screen=flow_data.get('exit_screen', ''),
 						steps=steps,
-						related_screens=related_screens,
-						related_workflows=related_workflows,
-						related_business_functions=related_business_functions,
-						related_transitions=list(set(related_transitions)),  # Deduplicate
-						# Phase 4: Enhanced cross-references
+						related_screens=list(set(related_screens)),  # Phase 3.3: Deduplicate
+						related_workflows=list(set(related_workflows)),  # Phase 3.3: Deduplicate
+						related_business_functions=list(set(related_business_functions)),  # Phase 3.3: Deduplicate
+						related_transitions=list(set(related_transitions)),  # Phase 3.3: Deduplicate
+						# Phase 3.3: Enhanced cross-references - ensure all sequences are complete
 						related_tasks=[],  # Will be populated from task extraction
-						related_actions=list(set(related_actions)),  # Deduplicate
-						screen_sequence=screen_sequence,
-						entry_actions=list(set(entry_actions)),
-						exit_actions=list(set(exit_actions)),
+						related_actions=list(set(related_actions)),  # Phase 3.3: Deduplicate and ensure complete
+						screen_sequence=screen_sequence,  # Phase 3.3: Complete sequence with all screens
+						entry_actions=list(set(entry_actions)),  # Phase 3.3: Deduplicate
+						exit_actions=list(set(exit_actions)),  # Phase 3.3: Deduplicate
 						business_reasoning=flow_data.get('business_reasoning'),
 						business_impact=flow_data.get('business_impact'),
 						business_requirements=flow_data.get('business_requirements', []),

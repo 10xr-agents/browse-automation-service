@@ -163,6 +163,12 @@ class ContentChunk(BaseModel):
 	# References
 	start_offset: int | None = Field(default=None, description="Character offset in source")
 	end_offset: int | None = Field(default=None, description="End character offset in source")
+	
+	# Phase 5.2: Metadata for storing additional information (e.g., raw frame analysis data)
+	metadata: dict[str, Any] | None = Field(
+		default=None,
+		description="Additional metadata (e.g., raw frame analysis data for spatial extraction)"
+	)
 
 
 class IngestionError(BaseModel):
@@ -290,12 +296,15 @@ def detect_source_type(source_url: str) -> SourceType:
 class UIElement(BaseModel):
 	"""Single UI element detected in a video frame."""
 
-	model_config = ConfigDict(extra='forbid')
+	model_config = ConfigDict(extra='allow')  # Phase 5.2: Allow extra fields for spatial info
 
 	type: str = Field(description="UI element type (button, form, menu, etc.)")
 	label: str | None = Field(default=None, description="Label or text content of the element")
-	position: dict[str, Any] | None = Field(default=None, description="Position information (x, y, width, height)")
+	position: dict[str, Any] | None = Field(default=None, description="Position information (x, y, width, height, bounding_box)")
 	state: str | None = Field(default=None, description="Element state (active, hover, disabled, etc.)")
+	# Phase 5.2: Spatial Information
+	importance_score: float | None = Field(default=None, ge=0.0, le=1.0, description="Visual importance score (0.0-1.0, higher=more important)")
+	layout_context: str | None = Field(default=None, description="Layout context: 'header', 'sidebar', 'main', 'footer', 'modal', 'navigation'")
 
 
 class DataElement(BaseModel):
@@ -352,9 +361,14 @@ class FrameAnalysisResponse(BaseModel):
 		default="",
 		description="All text visible on screen (labels, headings, body text, button text, etc.)"
 	)
-	layout_structure: str | None = Field(
+	layout_structure: str | dict[str, Any] | None = Field(
 		default=None,
-		description="Description of page layout (sections, columns, regions)"
+		description="Description of page layout (string) or structured layout data (dict with layout_type, columns, regions, sections) - Phase 5.2"
+	)
+	# Phase 5.2: Visual Hierarchy
+	visual_hierarchy: dict[str, Any] | None = Field(
+		default=None,
+		description="Visual hierarchy data: {elements: [{element_label, importance_score, visual_properties}]}"
 	)
 	data_elements: list[DataElement] = Field(
 		default_factory=list,

@@ -282,6 +282,8 @@ class TaskExtractor:
 		"""
 		Extract tasks from a single content chunk.
 		
+		Priority 5: Enhanced extraction with form context, better names, and screen linking.
+		
 		Args:
 			chunk: Content chunk to process
 		
@@ -290,17 +292,32 @@ class TaskExtractor:
 		"""
 		tasks = []
 
-		# Pattern: Look for task/workflow descriptions
+		# Priority 5: Enhanced patterns - look for form submissions and task descriptions
 		task_patterns = [
+			# Original patterns
 			r'(?:Task|Workflow|Procedure):\s+(.+)',
 			r'##\s+(?:How to|To)\s+(.+)',
 			r'### (.+?)\s+(?:Task|Workflow|Process)',
+			# Priority 5: Form-related patterns
+			r'submit\s+(?:the\s+)?(?:form\s+)?(?:on|for|to)\s+([^\n<]{1,100})',
+			r'(?:create|add|update|edit|delete|remove)\s+([^\n<]{1,100}?)(?:\s+on|\s+in|\s+form|\s+page|$)',
+			r'form\s+(?:to|for)\s+([^\n<]{1,100})',
+			r'button\s+(?:to|for)\s+([^\n<]{1,100})',
 		]
 
 		for pattern in task_patterns:
 			matches = re.finditer(pattern, chunk.content, re.IGNORECASE | re.MULTILINE)
 			for match in matches:
-				task_name = match.group(1).strip()
+				task_name_raw = match.group(1).strip()
+				
+				# Priority 5: Extract better task name from form context
+				task_name = self._extract_task_name_from_context(task_name_raw, chunk)
+				
+				# Skip if name is too generic
+				if self._is_generic_task_name(task_name):
+					logger.debug(f"Skipping generic task name: {task_name}")
+					continue
+				
 				task_id = self._generate_task_id(task_name)
 
 				# Extract context around the match
@@ -308,8 +325,8 @@ class TaskExtractor:
 				end = min(len(chunk.content), match.end() + 1500)
 				context = chunk.content[start:end]
 
-				# Create task definition
-				task = self._create_task_from_context(task_id, task_name, context)
+				# Priority 5: Create task with enhanced context (pass chunk for metadata access)
+				task = self._create_task_from_context(task_id, task_name, context, chunk)
 				tasks.append(task)
 
 		return tasks
@@ -318,19 +335,26 @@ class TaskExtractor:
 		self,
 		task_id: str,
 		task_name: str,
-		context: str
+		context: str,
+		chunk: ContentChunk | None = None
 	) -> TaskDefinition:
 		"""
 		Create task definition from extracted context.
+		
+		Priority 5: Enhanced with form context, better descriptions, and screen linking.
 		
 		Args:
 			task_id: Task identifier
 			task_name: Task name
 			context: Surrounding context text
+			chunk: Optional content chunk for metadata access (Priority 5)
 		
 		Returns:
 			TaskDefinition
 		"""
+		# Priority 5: Extract task purpose/goal from form context
+		task_purpose = self._extract_task_purpose(context, chunk)
+		
 		# Extract iterator spec (Agent-Killer #1)
 		iterator_spec = self._extract_iterator_spec(context)
 
@@ -343,18 +367,41 @@ class TaskExtractor:
 		# Validate linearity
 		self._validate_step_linearity(steps)
 
+		# Priority 5: Enhanced description with form context
+		description = self._extract_description(context, chunk, task_purpose)
+		
+		# Priority 5: Extract page URL and screen context for linking
+		page_url = None
+		screen_context = None
+		if chunk and chunk.metadata:
+			page_url = chunk.metadata.get('url')
+			# Extract screen name from metadata if available
+			if chunk.metadata.get('extracted_screen'):
+				screen_context = chunk.metadata['extracted_screen'].get('name')
+			elif chunk.section_title:
+				screen_context = chunk.section_title
+		
+		# Priority 5: Build metadata with page URL for screen linking
+		metadata = {
+			'extraction_method': 'rule_based',
+			'extracted_from': 'documentation',
+		}
+		if page_url:
+			metadata['page_url'] = page_url
+		if screen_context:
+			metadata['screen_context'] = screen_context
+		if task_purpose:
+			metadata['task_purpose'] = task_purpose
+
 		return TaskDefinition(
 			task_id=task_id,
 			name=task_name,
 			website_id=self.website_id,
-			description=self._extract_description(context),
+			description=description,
 			io_spec=io_spec,
 			iterator_spec=iterator_spec,
 			steps=steps,
-			metadata={
-				'extraction_method': 'rule_based',
-				'extracted_from': 'documentation',
-			}
+			metadata=metadata
 		)
 
 	def _extract_iterator_spec(self, context: str) -> IteratorSpec:
@@ -565,12 +612,277 @@ class TaskExtractor:
 		else:
 			return 'action'
 
-	def _extract_description(self, context: str) -> str:
-		"""Extract task description from context."""
-		# Get first few sentences
-		sentences = context.split('.')[:3]
-		description = '. '.join(s.strip() for s in sentences if s.strip())
-		return description[:200] if description else "No description"
+	def _extract_description(
+		self,
+		context: str,
+		chunk: ContentChunk | None = None,
+		task_purpose: str | None = None
+	) -> str:
+		"""
+		Extract task description from context.
+		
+		Phase 9: Improved context extraction to make tasks less generic.
+		Priority 5: Enhanced with form labels, page context, and task purpose.
+		
+		Args:
+			context: Surrounding context text
+			chunk: Optional content chunk for metadata access (Priority 5)
+			task_purpose: Optional task purpose/goal (Priority 5)
+		"""
+		# Priority 5: Start with task purpose if available
+		description_parts = []
+		if task_purpose:
+			description_parts.append(task_purpose)
+		
+		# Priority 5: Extract form labels and page context from chunk metadata
+		form_context = []
+		if chunk:
+			# Extract from video frame analysis metadata
+			if chunk.metadata and chunk.metadata.get('frame_analysis'):
+				frame_analysis = chunk.metadata['frame_analysis']
+				if isinstance(frame_analysis, dict):
+					# Extract visible text and UI elements
+					visible_text = frame_analysis.get('visible_text', '')
+					if visible_text:
+						form_context.append(f"Page context: {visible_text[:200]}")
+					
+					# Extract form labels from UI elements
+					ui_elements = frame_analysis.get('ui_elements', [])
+					if ui_elements:
+						form_labels = [
+							elem.get('label', '') for elem in ui_elements
+							if elem.get('type') in ['form', 'input', 'button'] and elem.get('label')
+						]
+						if form_labels:
+							form_context.append(f"Form fields: {', '.join(form_labels[:5])}")
+			
+			# Extract from section title or page title
+			if chunk.section_title and not self._is_generic_description(chunk.section_title):
+				form_context.append(f"Page: {chunk.section_title}")
+		
+		# Phase 9: Look for more specific description patterns
+		desc_patterns = [
+			r'(?:Task|Workflow|Procedure):\s+.+?\n(.+?)(?:\n\n|\n##|$)',
+			r'##\s+(?:How to|To)\s+.+?\n(.+?)(?:\n\n|\n##|$)',
+			r'###\s+.+?\s+(?:Task|Workflow|Process)\s*\n(.+?)(?:\n\n|\n##|$)',
+			r'Description[:\s]+(.+?)(?:\n\n|\n##|$)',
+			r'Purpose[:\s]+(.+?)(?:\n\n|\n##|$)',
+		]
+		
+		main_description = None
+		for pattern in desc_patterns:
+			match = re.search(pattern, context, re.IGNORECASE | re.DOTALL)
+			if match:
+				desc = match.group(1).strip()
+				# Phase 9: Filter out generic/instructional text
+				if not self._is_generic_description(desc):
+					main_description = desc[:500] if len(desc) > 500 else desc
+					break
+		
+		# Phase 9: Fallback: use first meaningful paragraph (not just first sentence)
+		if not main_description:
+			paragraphs = re.split(r'\n\n+', context)
+			for para in paragraphs:
+				para = para.strip()
+				# Skip very short paragraphs or those that look like headers
+				if len(para) > 50 and not para.startswith('#') and not self._is_generic_description(para):
+					main_description = para[:500]
+					break
+		
+		# Last resort: first few sentences
+		if not main_description:
+			sentences = context.split('.')[:3]
+			description = '. '.join(s.strip() for s in sentences if s.strip())
+			if description and not self._is_generic_description(description):
+				main_description = description[:500] if len(description) > 500 else description
+		
+		# Priority 5: Combine all description parts
+		if main_description:
+			description_parts.append(main_description)
+		
+		# Add form context if available
+		if form_context:
+			description_parts.extend(form_context)
+		
+		# Combine into final description
+		if description_parts:
+			final_description = '. '.join(description_parts)
+			return final_description[:1000] if len(final_description) > 1000 else final_description
+		
+		return "Task description"
+	
+	def _is_generic_description(self, text: str) -> bool:
+		"""Phase 9: Check if description is generic/instructional rather than specific."""
+		generic_indicators = [
+			'instruction', 'protocol', 'guideline', 'example',
+			'you should', 'you must', 'you need', 'your primary',
+			'follow-up question', 'conversational', 'empathetic',
+			'quality checklist', 'internal', 'before responding',
+			'never use', 'always use', 'critical', 'important',
+		]
+		text_lower = text.lower()
+		return any(indicator in text_lower for indicator in generic_indicators) or len(text) < 20
+	
+	def _extract_task_name_from_context(self, raw_name: str, chunk: ContentChunk) -> str:
+		"""
+		Priority 5: Extract better task name from form context.
+		
+		Enhances generic task names by extracting from:
+		- Form labels and button text
+		- Page titles and screen names
+		- Visible text from video frames
+		
+		Args:
+			raw_name: Raw task name from pattern match
+			chunk: Content chunk with metadata
+		
+		Returns:
+			Enhanced task name
+		"""
+		# If name is already descriptive, return it
+		if not self._is_generic_task_name(raw_name):
+			return raw_name
+		
+		# Priority 5: Extract from chunk metadata
+		if chunk and chunk.metadata:
+			# Extract from video frame analysis
+			if chunk.metadata.get('frame_analysis'):
+				frame_analysis = chunk.metadata['frame_analysis']
+				if isinstance(frame_analysis, dict):
+					# Extract from screen state
+					screen_state = frame_analysis.get('screen_state', '')
+					if screen_state and screen_state != 'Unknown':
+						# Extract action from screen state (e.g., "Create Agent" from "Create Agent Screen")
+						if any(action in screen_state.lower() for action in ['create', 'add', 'update', 'edit', 'delete']):
+							return screen_state
+					
+					# Extract from button text
+					ui_elements = frame_analysis.get('ui_elements', [])
+					for elem in ui_elements:
+						if elem.get('type') == 'button' and elem.get('label'):
+							button_text = elem['label']
+							# Check if button text indicates an action
+							if any(action in button_text.lower() for action in ['create', 'add', 'update', 'edit', 'delete', 'save', 'submit']):
+								# Combine with screen context if available
+								if screen_state and screen_state != 'Unknown':
+									return f"{button_text} on {screen_state}"
+								return button_text
+			
+			# Extract from section title or page title
+			if chunk.section_title:
+				section_title = chunk.section_title.strip()
+				# Check if section title indicates a task
+				if any(action in section_title.lower() for action in ['create', 'add', 'update', 'edit', 'delete', 'manage']):
+					return section_title
+		
+		# Priority 5: Extract from context text (form labels, headings)
+		# Look for form-related patterns in content
+		form_name_patterns = [
+			r'form\s+(?:to|for)\s+([^\n<]{1,80})',
+			r'(?:create|add|update|edit|delete)\s+([^\n<]{1,80}?)(?:\s+form|\s+page|$)',
+			r'button\s+(?:to|for)\s+([^\n<]{1,80})',
+			r'##\s+([^\n<]{1,80}?)(?:\s+Form|\s+Page|$)',
+		]
+		
+		if chunk:
+			for pattern in form_name_patterns:
+				match = re.search(pattern, chunk.content, re.IGNORECASE)
+				if match:
+					extracted_name = match.group(1).strip()
+					if not self._is_generic_task_name(extracted_name):
+						return extracted_name
+		
+		# Return original if no enhancement found
+		return raw_name
+	
+	def _is_generic_task_name(self, name: str) -> bool:
+		"""
+		Priority 5: Check if task name is generic (e.g., "Submit form on Spadeworks").
+		
+		Args:
+			name: Task name to check
+		
+		Returns:
+			True if generic, False if specific
+		"""
+		name_lower = name.lower()
+		
+		# Generic patterns
+		generic_patterns = [
+			'submit form',
+			'submit form on',
+			'form on',
+			'form for',
+			'form to',
+			'click submit',
+			'press submit',
+		]
+		
+		# Check if name matches generic patterns
+		if any(pattern in name_lower for pattern in generic_patterns):
+			return True
+		
+		# Check if name is too short or too generic
+		if len(name) < 10:
+			return True
+		
+		# Check if name contains specific action words (not generic)
+		specific_actions = ['create', 'add', 'update', 'edit', 'delete', 'remove', 'manage', 'configure']
+		if any(action in name_lower for action in specific_actions):
+			return False
+		
+		# If name contains website name but no specific action, it's generic
+		if 'spadeworks' in name_lower and not any(action in name_lower for action in specific_actions):
+			return True
+		
+		return False
+	
+	def _extract_task_purpose(self, context: str, chunk: ContentChunk | None = None) -> str | None:
+		"""
+		Priority 5: Extract task purpose/goal from form context.
+		
+		Extracts what the form/task is for (e.g., "Create Agent", "Update Campaign Settings").
+		
+		Args:
+			context: Surrounding context text
+			chunk: Optional content chunk for metadata access
+		
+		Returns:
+			Task purpose/goal or None
+		"""
+		# Priority 5: Look for purpose patterns in context
+		purpose_patterns = [
+			r'(?:to|for)\s+(?:create|add|update|edit|delete|manage|configure)\s+([^\n<]{1,80})',
+			r'(?:form|task|workflow)\s+(?:to|for)\s+([^\n<]{1,80})',
+			r'purpose[:\s]+([^\n<]{1,80})',
+			r'goal[:\s]+([^\n<]{1,80})',
+		]
+		
+		for pattern in purpose_patterns:
+			match = re.search(pattern, context, re.IGNORECASE)
+			if match:
+				purpose = match.group(1).strip()
+				# Filter out generic text
+				if not self._is_generic_description(purpose) and len(purpose) > 10:
+					return purpose
+		
+		# Priority 5: Extract from chunk metadata (screen state, visible text)
+		if chunk and chunk.metadata:
+			if chunk.metadata.get('frame_analysis'):
+				frame_analysis = chunk.metadata['frame_analysis']
+				if isinstance(frame_analysis, dict):
+					# Extract from business function or operational aspect
+					business_function = frame_analysis.get('business_function', '')
+					operational_aspect = frame_analysis.get('operational_aspect', '')
+					
+					if business_function and operational_aspect:
+						return f"{operational_aspect} for {business_function}"
+					elif business_function:
+						return business_function
+					elif operational_aspect:
+						return operational_aspect
+		
+		return None
 
 	def _validate_step_linearity(self, steps: list[TaskStep]) -> None:
 		"""

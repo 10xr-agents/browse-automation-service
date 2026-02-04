@@ -53,7 +53,7 @@ async def save_business_function(
 			upsert=True
 		)
 
-		# Update cross-references (Phase 2: CrossReferenceManager)
+		# Phase 3.4: Update cross-references (enhanced to link to all entity types)
 		from navigator.knowledge.persist.cross_references import get_cross_reference_manager
 		cross_ref_manager = get_cross_reference_manager()
 
@@ -66,6 +66,115 @@ async def save_business_function(
 					business_function.business_function_id,
 					knowledge_id
 				)
+
+		# Phase 3.4: Link business function to actions if related_actions are set
+		if hasattr(business_function, 'related_actions') and business_function.related_actions:
+			for action_id in business_function.related_actions:
+				await cross_ref_manager.link_entity_to_business_function(
+					'action',
+					action_id,
+					business_function.business_function_id,
+					knowledge_id
+				)
+
+		# Phase 3.4: Link business function to tasks if related_tasks are set
+		if hasattr(business_function, 'related_tasks') and business_function.related_tasks:
+			for task_id in business_function.related_tasks:
+				await cross_ref_manager.link_entity_to_business_function(
+					'task',
+					task_id,
+					business_function.business_function_id,
+					knowledge_id
+				)
+
+		# Phase 3.4: Link business function to workflows if related_workflows are set
+		if hasattr(business_function, 'related_workflows') and business_function.related_workflows:
+			for workflow_id in business_function.related_workflows:
+				await cross_ref_manager.link_entity_to_business_function(
+					'workflow',
+					workflow_id,
+					business_function.business_function_id,
+					knowledge_id
+				)
+
+		# Phase 3.4: Link business function to user flows if related_user_flows are set
+		if hasattr(business_function, 'related_user_flows') and business_function.related_user_flows:
+			for user_flow_id in business_function.related_user_flows:
+				await cross_ref_manager.link_business_function_to_user_flow(
+					business_function.business_function_id,
+					user_flow_id,
+					knowledge_id
+				)
+		
+		# Priority 6: Link business function to screens mentioned in documentation
+		# Enhanced with fuzzy matching and support for both web_ui and documentation screens
+		if hasattr(business_function, 'metadata') and business_function.metadata:
+			screens_mentioned = business_function.metadata.get('screens_mentioned', [])
+			if screens_mentioned:
+				# Priority 6: Query all screens (both web_ui and documentation) for matching
+				from navigator.knowledge.persist.documents.screens import query_screens_by_knowledge_id
+				from navigator.knowledge.persist.linking_helpers import find_screens_by_name
+				
+				# Get all screens (web_ui and documentation) for matching
+				all_screens = await query_screens_by_knowledge_id(
+					knowledge_id=knowledge_id,
+					job_id=job_id,
+					limit=1000,  # Get all screens for matching
+					content_type=None,  # Priority 6: Get all content types (web_ui and documentation)
+					actionable_only=False  # Priority 6: Include non-actionable documentation screens
+				)
+				
+				# Priority 6: Match screens by name using fuzzy matching
+				matched_screen_ids = []
+				unmatched_screen_names = []
+				
+				for screen_name in screens_mentioned:
+					# Priority 6: Use fuzzy matching to find screens
+					matched_screens = find_screens_by_name(
+						screen_name,
+						all_screens,
+						fuzzy=True,  # Priority 6: Enable fuzzy matching
+						threshold=0.6  # Priority 6: Similarity threshold (60% match required)
+					)
+					
+					if matched_screens:
+						# Link all matched screens to business function
+						for screen in matched_screens:
+							if screen.screen_id not in matched_screen_ids:
+								matched_screen_ids.append(screen.screen_id)
+								# Link screen to business function (bidirectional)
+								await cross_ref_manager.link_entity_to_business_function(
+									'screen',
+									screen.screen_id,
+									business_function.business_function_id,
+									knowledge_id
+								)
+								logger.debug(
+									f"Priority 6: Linked screen '{screen.name}' (content_type={screen.content_type}) "
+									f"to business function '{business_function.name}' "
+									f"via screens_mentioned '{screen_name}' (fuzzy match)"
+								)
+					else:
+						# Priority 6: Track unmatched screens for potential placeholder links
+						unmatched_screen_names.append(screen_name)
+						logger.debug(
+							f"Priority 6: No match found for screens_mentioned '{screen_name}' "
+							f"in business function '{business_function.name}'"
+						)
+				
+				if matched_screen_ids:
+					logger.info(
+						f"Priority 6: Linked {len(matched_screen_ids)} screens (fuzzy matching) "
+						f"to business function '{business_function.name}' "
+						f"from {len(screens_mentioned)} screens_mentioned"
+					)
+				
+				# Priority 6: Log unmatched screens (for potential placeholder links in future)
+				if unmatched_screen_names:
+					logger.debug(
+						f"Priority 6: {len(unmatched_screen_names)} unmatched screens_mentioned "
+						f"for business function '{business_function.name}': {unmatched_screen_names}"
+					)
 
 		logger.info(
 			f"Saved business function: "

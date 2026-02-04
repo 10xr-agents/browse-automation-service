@@ -306,6 +306,27 @@ class ExtractUserFlowsResult:
 	success: bool = True
 
 
+# --- Post-Extraction Entity Linking Activity (Priority 2) ---
+
+@dataclass
+class LinkEntitiesInput:
+	"""Input for link_entities_activity."""
+	knowledge_id: str
+	job_id: str | None = None
+
+
+@dataclass
+class LinkEntitiesResult:
+	"""Result of link_entities_activity."""
+	tasks_linked: int
+	actions_linked: int
+	business_functions_linked: int
+	workflows_linked: int
+	transitions_linked: int
+	errors: list[str] = field(default_factory=list)
+	success: bool = True
+
+
 # --- Video Sub-Activities ---
 
 @dataclass

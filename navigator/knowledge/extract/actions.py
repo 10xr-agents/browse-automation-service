@@ -61,6 +61,24 @@ class ActionDefinition(BaseModel):
 	idempotent: bool = Field(default=True, description="Whether action is idempotent")
 	reversible_by: str | None = Field(None, description="Action that reverses this one")
 	metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+	
+	# Delay Intelligence (captured from actual execution)
+	delay_intelligence: dict[str, Any] | None = Field(
+		None,
+		description="Delay intelligence: average_delay_ms, recommended_wait_time_ms, is_slow, is_fast, variability, confidence"
+	)
+
+	# Phase 1.4: Browser-Use Action Mappings
+	browser_use_action: dict[str, Any] | None = Field(
+		None,
+		description="Browser-use action mapping (tool_name, parameters, description, confidence)"
+	)
+	confidence_score: float | None = Field(
+		None,
+		ge=0.0,
+		le=1.0,
+		description="Confidence score for extracted action (0-1, higher=more confident)"
+	)
 
 	# Cross-reference fields (Phase 1: Schema Updates)
 	screen_ids: list[str] = Field(
@@ -172,6 +190,37 @@ class ActionExtractor:
 
 			# Deduplicate actions
 			result.actions = self._deduplicate_actions(result.actions)
+			
+			# Phase 9: Translate actions to browser-use format
+			from navigator.knowledge.extract.browser_use_mapping import ActionTranslator
+			translator = ActionTranslator()
+			
+			for action in result.actions:
+				# For navigation actions, ensure URL is in browser_use_action if we extracted it
+				if action.action_type == 'navigate' and action.parameters.get('url'):
+					# Update browser_use_action to include the extracted URL
+					if not action.browser_use_action:
+						action.browser_use_action = {}
+					if 'parameters' not in action.browser_use_action:
+						action.browser_use_action['parameters'] = {}
+					action.browser_use_action['parameters']['url'] = action.parameters['url']
+				
+				# Translate to browser-use action
+				try:
+					browser_use_action = translator.translate_action(action)
+					if browser_use_action:
+						# Merge extracted URL if available
+						if action.action_type == 'navigate' and action.parameters.get('url'):
+							browser_use_action.parameters['url'] = action.parameters['url']
+						action.browser_use_action = browser_use_action.model_dump()
+						# Calculate confidence score based on translation success
+						action.confidence_score = 0.8 if browser_use_action.confidence is None else browser_use_action.confidence
+					else:
+						# Lower confidence if translation failed
+						action.confidence_score = 0.5
+				except Exception as e:
+					logger.debug(f"Failed to translate action {action.action_id} to browser-use: {e}")
+					action.confidence_score = 0.3
 
 			# Validate extracted actions
 			for action in result.actions:
@@ -188,7 +237,8 @@ class ActionExtractor:
 
 			logger.info(
 				f"✅ Extracted {result.statistics['total_actions']} actions "
-				f"({result.statistics['idempotent_actions']} idempotent)"
+				f"({result.statistics['idempotent_actions']} idempotent, "
+				f"{sum(1 for a in result.actions if a.browser_use_action)} with browser-use mappings)"
 			)
 
 		except Exception as e:
@@ -198,8 +248,16 @@ class ActionExtractor:
 		return result
 
 	def _extract_actions_from_chunk(self, chunk: ContentChunk) -> list[ActionDefinition]:
-		"""Extract actions from a single content chunk."""
+		"""Extract actions from a single content chunk.
+		
+		Phase 9: Enhanced filtering to exclude table headers and documentation text.
+		"""
 		actions = []
+
+		# Phase 9: Detect table headers in content (markdown tables)
+		# Pattern: "| Column1 | Column2 |" or similar table header patterns
+		table_header_pattern = r'^\s*\|[^|]+\|[^|]*\|'
+		has_table_headers = bool(re.search(table_header_pattern, chunk.content, re.MULTILINE))
 
 		# Action patterns: verb + target (greedy capture to get full target)
 		action_patterns = [
@@ -216,23 +274,87 @@ class ActionExtractor:
 			for match in matches:
 				target = match.group(1).strip()
 
-				# Skip if target is too short or generic
+				# Phase 9: Skip if target is too short or generic
 				if len(target) < 2 or target.lower() in ['the', 'a', 'an', 'it']:
+					continue
+				
+				# Phase 9: Filter out table headers
+				# Check if target looks like a table header (contains | or is in table context)
+				if '|' in target or (has_table_headers and self._is_table_header(target, chunk.content, match.start())):
+					logger.debug(f"Skipping table header as action: {target}")
+					continue
+				
+				# Phase 9: Only extract actions from actual UI interaction descriptions
+				# Skip if context suggests this is documentation/instruction text
+				context_start = max(0, match.start() - 100)
+				context_end = min(len(chunk.content), match.end() + 100)
+				context = chunk.content[context_start:context_end]
+				
+				if self._is_documentation_text(context):
+					logger.debug(f"Skipping documentation text as action: {target}")
 					continue
 
 				action_id = self._generate_action_id(action_type, target)
 
-				# Extract context
+				# Extract full context
 				start = max(0, match.start() - 200)
 				end = min(len(chunk.content), match.end() + 500)
-				context = chunk.content[start:end]
+				full_context = chunk.content[start:end]
 
 				action = self._create_action_from_context(
-					action_id, action_type, target, context
+					action_id, action_type, target, full_context
 				)
-				actions.append(action)
+				
+				# Phase 9: Validate action before adding
+				if self._is_valid_action(action):
+					actions.append(action)
+				else:
+					logger.debug(f"Skipping invalid action: {action.action_id}")
 
 		return actions
+	
+	def _is_table_header(self, target: str, content: str, match_pos: int) -> bool:
+		"""Phase 9: Check if target is part of a table header."""
+		# Check if target appears in a table row pattern
+		# Look for patterns like "| target |" or "| Column1 | Column2 |"
+		table_row_pattern = rf'\|\s*{re.escape(target)}\s*\|'
+		if re.search(table_row_pattern, content, re.IGNORECASE):
+			# Check if it's in a header row (usually first row after table start)
+			# Simple heuristic: if it's near the start of content or after "| --- |" separator
+			context_start = max(0, match_pos - 200)
+			context = content[context_start:match_pos + 200]
+			# Table headers often have separator rows like "| --- | --- |"
+			if re.search(r'\|\s*-+\s*\|', context):
+				return True
+		return False
+	
+	def _is_documentation_text(self, context: str) -> bool:
+		"""Phase 9: Check if context is documentation/instruction text rather than UI interaction."""
+		doc_indicators = [
+			'instruction', 'protocol', 'guideline', 'example',
+			'note:', 'warning:', 'tip:', 'important:',
+			'you should', 'you must', 'you need', 'your primary',
+			'follow-up question', 'conversational', 'empathetic',
+		]
+		context_lower = context.lower()
+		return any(indicator in context_lower for indicator in doc_indicators)
+	
+	def _is_valid_action(self, action: ActionDefinition) -> bool:
+		"""Phase 9: Validate action has reasonable action type and target."""
+		# Valid action types
+		valid_action_types = [
+			'click', 'type', 'navigate', 'select_option', 'scroll', 'wait',
+			'upload_file', 'submit', 'hover', 'drag_drop', 'screenshot',
+		]
+		
+		if action.action_type not in valid_action_types:
+			return False
+		
+		# Target should not be empty
+		if not action.target_selector and not action.metadata.get('target'):
+			return False
+		
+		return True
 
 	def _create_action_from_context(
 		self,
@@ -250,6 +372,15 @@ class ActionExtractor:
 
 		# Extract postconditions
 		postconditions = self._extract_postconditions(context)
+		
+		# Extract URL for navigation actions
+		parameters = {}
+		if action_type == 'navigate':
+			extracted_url = self._extract_url_from_navigation_action(target, context)
+			if extracted_url:
+				parameters['url'] = extracted_url
+				# Also update browser_use_action if it exists
+				# This will be set later in extract_actions, but we can prepare it here
 
 		return ActionDefinition(
 			action_id=action_id,
@@ -258,6 +389,7 @@ class ActionExtractor:
 			action_type=action_type,
 			category=self._categorize_action(action_type),
 			target_selector=self._generate_selector(target),
+			parameters=parameters,  # Include extracted URL
 			preconditions=preconditions,
 			postconditions=postconditions,
 			idempotent=idempotent,
@@ -266,6 +398,74 @@ class ActionExtractor:
 				'target': target,
 			}
 		)
+	
+	def _extract_url_from_navigation_action(self, target: str, context: str) -> str | None:
+		"""
+		Extract actual URL from navigation action context.
+		
+		Looks for:
+		- Explicit URLs in context (https://, http://)
+		- Relative paths (/dashboard, /users/123)
+		- Link hrefs mentioned in context
+		- URL patterns in context
+		
+		Args:
+			target: Action target (e.g., "Dashboard", "Agent page")
+			context: Full context around the action
+		
+		Returns:
+			Extracted URL or None if not found
+		"""
+		# Strategy 1: Look for explicit URLs in context
+		url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+		url_matches = re.finditer(url_pattern, context, re.IGNORECASE)
+		for match in url_matches:
+			url = match.group(0)
+			# Check if URL is related to the target (contains target keywords)
+			target_lower = target.lower()
+			url_lower = url.lower()
+			# If target mentions a page name, check if URL path matches
+			if any(keyword in url_lower for keyword in target_lower.split() if len(keyword) > 3):
+				return url
+			# If no match, return first URL found (might be the navigation target)
+			return url
+		
+		# Strategy 2: Look for relative paths in context
+		# Pattern: /path/to/page or /dashboard, /users/123
+		relative_path_pattern = r'/(?:[a-zA-Z0-9_-]+/)*[a-zA-Z0-9_-]+(?:\?[^\s<>"{}|\\^`\[\]]+)?'
+		path_matches = re.finditer(relative_path_pattern, context)
+		for match in path_matches:
+			path = match.group(0)
+			# Check if path segment matches target
+			path_segments = [s for s in path.split('/') if s]
+			if path_segments:
+				last_segment = path_segments[-1].split('?')[0]  # Remove query params
+				target_words = target.lower().split()
+				# Check if any target word appears in path
+				if any(word in last_segment.lower() for word in target_words if len(word) > 3):
+					# Return as relative path (will be resolved to full URL later)
+					return path
+		
+		# Strategy 3: Look for href attributes in context
+		href_pattern = r'href=["\']([^"\']+)["\']'
+		href_matches = re.finditer(href_pattern, context, re.IGNORECASE)
+		for match in href_matches:
+			href = match.group(1)
+			# Check if href matches target
+			if any(word in href.lower() for word in target.lower().split() if len(word) > 3):
+				return href
+		
+		# Strategy 4: Infer from target name (convert "Dashboard" -> "/dashboard")
+		# Only if target looks like a page name (not a generic word)
+		if len(target.split()) <= 3 and not target.lower() in ['the', 'a', 'an', 'it', 'page']:
+			# Convert to URL-friendly format
+			url_segment = target.lower().replace(' ', '-').replace('_', '-')
+			# Remove special characters
+			url_segment = re.sub(r'[^\w-]', '', url_segment)
+			if url_segment and len(url_segment) > 2:
+				return f"/{url_segment}"
+		
+		return None
 
 	def _is_idempotent(self, action_type: str, context: str) -> bool:
 		"""Determine if action is idempotent."""

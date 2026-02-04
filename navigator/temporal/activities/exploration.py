@@ -583,8 +583,12 @@ async def explore_primary_url_activity(
 			exploration_chunks = [page['chunk'] for page in explored_pages]
 
 			# Extract screens
-			screen_extractor = ScreenExtractor(website_id=input.website_id)
-			screens_result = screen_extractor.extract_screens(exploration_chunks)
+			screen_extractor = ScreenExtractor(
+				website_id=input.website_id,
+				confidence_threshold=0.3,  # Priority 9: Auto-reject screens below 0.3 confidence
+				knowledge_id=input.knowledge_id if hasattr(input, 'knowledge_id') else None  # Priority 9: Enable cross-reference validation
+			)
+			screens_result = await screen_extractor.extract_screens(exploration_chunks)
 
 			if screens_result.screens:
 				# Save new screens with knowledge_id and job_id

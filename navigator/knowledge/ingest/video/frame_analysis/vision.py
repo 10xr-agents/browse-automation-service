@@ -75,28 +75,50 @@ IMPORTANT: Return ONLY valid JSON. Do not include markdown formatting or explana
 JSON structure:
 
 1. **ALL Visible UI elements** (buttons, forms, menus, text fields, navigation, icons, images, logos, headers, footers, sidebars, modals, tooltips, badges, labels, links, dropdowns, checkboxes, radio buttons, sliders, progress bars, tabs, breadcrumbs, search bars, filters, pagination, notifications, alerts, dialogs, popups)
+   - For EACH element, provide position as {x, y, width, height, bounding_box: {x, y, width, height}}
+   - x, y: Top-left corner coordinates (pixels from top-left of frame)
+   - width, height: Element dimensions in pixels
+   - bounding_box: Same as position (for consistency)
+   - Estimate position visually - be as accurate as possible
 2. **Current screen/page state** (exact screen name, page type, application state)
 3. **ALL user interactions visible** (cursor position, highlighted elements, hover states, active states, focus states, selected items, expanded/collapsed states)
 4. **Business context** (what business function is being demonstrated? what domain/application?)
 5. **Operational aspects** (what operational workflow step is this? what process?)
 6. **ALL visible text** (extract every piece of text visible on screen - labels, headings, body text, button text, form placeholders, error messages, tooltips, notifications)
-7. **Layout and structure** (page layout, sections, columns, regions)
-8. **Visual indicators** (loading states, success indicators, error states, warning states, info states)
-9. **Data visible** (tables, lists, cards, any displayed data)
-10. **Navigation elements** (menus, breadcrumbs, tabs, pagination, back/forward buttons)
+7. **Layout and structure** (Phase 5.2: Extract structured layout information)
+   - layout_type: "grid" | "flexbox" | "columns" | "standard"
+   - columns: number (1, 2, 3, etc.)
+   - regions: array of {type: "header"|"sidebar"|"main"|"footer"|"modal"|"navigation", bounds: {x, y, width, height}}
+   - sections: array of section names/descriptions
+8. **Visual hierarchy** (Phase 5.2: Extract visual importance)
+   - For each UI element, estimate importance_score (0.0-1.0):
+     - 1.0 = Most important (primary actions, main content)
+     - 0.7-0.9 = Important (navigation, key features)
+     - 0.4-0.6 = Moderate (secondary actions, supporting content)
+     - 0.1-0.3 = Low (footer links, decorative elements)
+   - Consider: size, position (top/center = more important), visual prominence
+9. **Visual indicators** (loading states, success indicators, error states, warning states, info states)
+10. **Data visible** (tables, lists, cards, any displayed data)
+11. **Navigation elements** (menus, breadcrumbs, tabs, pagination, back/forward buttons)
 
 Return a JSON object with:
-- ui_elements: array of {type, label, position, state} - include EVERY element
+- ui_elements: array of {type, label, position: {x, y, width, height, bounding_box: {x, y, width, height}}, state, importance_score: 0.0-1.0, layout_context: "header"|"sidebar"|"main"|"footer"|"modal"|"navigation"} - include EVERY element with position data
 - screen_state: string (exact screen name)
 - business_function: string
 - operational_aspect: string
 - visible_actions: array of strings (all visible interactions)
 - visible_text: string (all text visible on screen)
-- layout_structure: string (description of page layout)
+- layout_structure: object {layout_type, columns, regions: [{type, bounds: {x, y, width, height}}], sections: []} (Phase 5.2: structured layout data)
+- visual_hierarchy: object {elements: [{element_label, importance_score, visual_properties: {size, position, prominence}}]} (Phase 5.2: visual hierarchy data)
 - data_elements: array of {type, content} (tables, lists, etc.)
 - visual_indicators: array of {type, message} (loading, errors, etc.)
 
-CRITICAL: Return ONLY valid JSON without markdown code blocks. Start with { and end with }. Be COMPREHENSIVE - do not miss any features!"""
+CRITICAL: 
+- Return ONLY valid JSON without markdown code blocks. Start with { and end with }.
+- Be COMPREHENSIVE - do not miss any features!
+- Phase 5.2: For position data, estimate pixel coordinates based on frame dimensions. If frame is 1920x1080, provide coordinates relative to that.
+- Phase 5.2: Include importance_score and layout_context for EVERY ui_element.
+- Phase 5.2: Provide structured layout_structure object, not just a string description."""
 
 	# Open PIL Image and pass directly to SDK
 	with Image.open(frame_path) as img:
@@ -170,6 +192,79 @@ CRITICAL: Return ONLY valid JSON without markdown code blocks. Start with { and 
 				logger.warning(f"Failed to parse JSON from LLM response for frame {timestamp}s. Attempted multiple extraction methods.")
 				logger.debug(f"Raw response (first 500 chars): {content[:500]}")
 
+	# Phase 5.2: Post-process spatial information from frame analysis
+	if analysis_dict:
+		# Normalize position data in ui_elements
+		if 'ui_elements' in analysis_dict and isinstance(analysis_dict['ui_elements'], list):
+			for element in analysis_dict['ui_elements']:
+				if isinstance(element, dict):
+					# Ensure position has proper structure
+					if 'position' in element and isinstance(element['position'], dict):
+						pos = element['position']
+						# Ensure bounding_box exists
+						if 'bounding_box' not in pos and all(k in pos for k in ['x', 'y', 'width', 'height']):
+							element['position']['bounding_box'] = {
+								'x': pos.get('x', 0),
+								'y': pos.get('y', 0),
+								'width': pos.get('width', 0),
+								'height': pos.get('height', 0),
+							}
+					
+					# Normalize importance_score
+					if 'importance_score' in element:
+						try:
+							score = float(element['importance_score'])
+							element['importance_score'] = max(0.0, min(1.0, score))
+						except (ValueError, TypeError):
+							element['importance_score'] = None
+					
+					# Normalize layout_context
+					if 'layout_context' in element and element['layout_context']:
+						valid_contexts = ['header', 'sidebar', 'main', 'footer', 'modal', 'navigation']
+						if element['layout_context'].lower() not in valid_contexts:
+							# Try to infer from position
+							if element.get('position') and isinstance(element['position'], dict):
+								x = element['position'].get('x', 0)
+								y = element['position'].get('y', 0)
+								if y < 100:
+									element['layout_context'] = 'header'
+								elif x < 300:
+									element['layout_context'] = 'sidebar'
+								elif y > 930:
+									element['layout_context'] = 'footer'
+								else:
+									element['layout_context'] = 'main'
+		
+		# Normalize layout_structure (convert string to dict if needed)
+		if 'layout_structure' in analysis_dict:
+			layout = analysis_dict['layout_structure']
+			if isinstance(layout, str) and layout:
+				# Try to parse structured layout from string description
+				# For now, keep as string but log for future enhancement
+				logger.debug(f"Layout structure is string, not structured object for frame {timestamp}s")
+			elif isinstance(layout, dict):
+				# Ensure required fields exist
+				if 'layout_type' not in layout:
+					layout['layout_type'] = 'standard'
+				if 'columns' not in layout:
+					layout['columns'] = 1
+				if 'regions' not in layout:
+					layout['regions'] = []
+				if 'sections' not in layout:
+					layout['sections'] = []
+		
+		# Normalize visual_hierarchy
+		if 'visual_hierarchy' in analysis_dict and isinstance(analysis_dict['visual_hierarchy'], dict):
+			vh = analysis_dict['visual_hierarchy']
+			if 'elements' in vh and isinstance(vh['elements'], list):
+				for vh_elem in vh['elements']:
+					if isinstance(vh_elem, dict) and 'importance_score' in vh_elem:
+						try:
+							score = float(vh_elem['importance_score'])
+							vh_elem['importance_score'] = max(0.0, min(1.0, score))
+						except (ValueError, TypeError):
+							vh_elem['importance_score'] = None
+
 	# Validate and normalize using Pydantic model
 	if analysis_dict:
 		try:
@@ -178,6 +273,10 @@ CRITICAL: Return ONLY valid JSON without markdown code blocks. Start with { and 
 		except Exception as e:
 			logger.warning(f"Failed to validate frame analysis with Pydantic model for {timestamp}s: {e}")
 			logger.debug(f"Raw analysis dict: {analysis_dict}")
+			# Phase 5.2: Try to preserve spatial data even if validation fails
+			if 'ui_elements' in analysis_dict:
+				# Keep ui_elements with spatial info even if validation fails
+				pass
 	else:
 		# Fallback: create minimal structured response
 		logger.warning(f"Could not parse JSON from LLM response for frame {timestamp}s, using fallback")
@@ -189,6 +288,7 @@ CRITICAL: Return ONLY valid JSON without markdown code blocks. Start with { and 
 			'visible_actions': [],
 			'visible_text': content[:500] if len(content) > 0 else '',
 			'layout_structure': None,
+			'visual_hierarchy': None,
 			'data_elements': [],
 			'visual_indicators': [],
 		}

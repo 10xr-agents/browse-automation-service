@@ -46,6 +46,23 @@ async def save_transition(
 		if job_id:
 			transition_dict['job_id'] = job_id
 
+		# Sync delay intelligence if available (from DelayTracker) - do this BEFORE saving
+		if transition.delay_intelligence is None:
+			try:
+				from navigator.knowledge.delay_intelligence_sync import get_delay_intelligence_for_transition
+				# Get delay intelligence directly (non-blocking, won't fail if not available)
+				delay_intel = get_delay_intelligence_for_transition(transition.transition_id, min_samples=1)
+				if delay_intel:
+					transition.delay_intelligence = delay_intel
+					transition_dict['delay_intelligence'] = delay_intel
+					# Update cost.estimated_ms with actual delay
+					transition.cost['estimated_ms'] = delay_intel['recommended_wait_time_ms']
+					transition.cost['actual_avg_ms'] = delay_intel['average_delay_ms']
+					transition.cost['confidence'] = delay_intel['confidence']
+					transition_dict['cost'] = transition.cost
+			except Exception as e:
+				logger.debug(f"Could not get delay intelligence for transition {transition.transition_id}: {e}")
+		
 		# Upsert by transition_id
 		await collection.update_one(
 			{'transition_id': transition.transition_id},

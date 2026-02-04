@@ -11,6 +11,7 @@ from navigator.temporal.activities.exploration import explore_primary_url_activi
 # Import extraction activities
 from navigator.temporal.activities.extraction.actions import extract_actions_activity
 from navigator.temporal.activities.extraction.business_functions import extract_business_functions_activity
+from navigator.temporal.activities.extraction.linking import link_entities_activity
 from navigator.temporal.activities.extraction.screens import extract_screens_activity
 from navigator.temporal.activities.extraction.tasks import extract_tasks_activity
 from navigator.temporal.activities.extraction.transitions import extract_transitions_activity
@@ -57,6 +58,7 @@ __all__ = [
 	'extract_business_functions_activity',
 	'extract_workflows_activity',
 	'extract_user_flows_activity',  # Phase 4
+	'link_entities_activity',  # Priority 2: Post-Extraction Entity Linking
 	# Graph
 	'build_graph_activity',
 	# Verification

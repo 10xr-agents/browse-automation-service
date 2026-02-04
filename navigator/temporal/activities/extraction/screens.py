@@ -92,8 +92,100 @@ async def extract_screens_activity(input: ExtractScreensInput) -> ExtractScreens
 		# Extract screens from chunks
 		# website_id is required for ScreenExtractor, use input value or default
 		website_id = input.website_id or "unknown"
-		screen_extractor = ScreenExtractor(website_id=website_id)
-		screens_result = screen_extractor.extract_screens(content_chunks)
+		screen_extractor = ScreenExtractor(
+			website_id=website_id,
+			confidence_threshold=0.3,  # Priority 9: Auto-reject screens below 0.3 confidence
+			knowledge_id=input.knowledge_id  # Priority 9: Enable cross-reference validation
+		)
+		screens_result = await screen_extractor.extract_screens(content_chunks)
+
+		# Phase 5.2: Enrich screens with spatial information from video frame analyses
+		frame_analysis_chunks = [c for c in content_chunks if c.chunk_type == "video_frame_analysis"]
+		if frame_analysis_chunks:
+			logger.info(f"🎬 Phase 5.2: Enriching screens with spatial info from {len(frame_analysis_chunks)} video frame analyses")
+			
+			# Extract frame analyses from chunk metadata or parse from content
+			frame_analyses = []
+			for chunk in frame_analysis_chunks:
+				# Try to get raw frame analysis from metadata
+				if hasattr(chunk, 'metadata') and chunk.metadata and 'frame_analysis' in chunk.metadata:
+					frame_analyses.append(chunk.metadata['frame_analysis'])
+				else:
+					# Try to parse from formatted content (fallback)
+					# Note: This is less reliable, ideally frame_analysis should be in metadata
+					logger.debug(f"Frame analysis chunk {chunk.chunk_id} has no metadata.frame_analysis, skipping spatial enrichment for this chunk")
+			
+			if frame_analyses:
+				# Enrich screens with spatial information
+				enriched_screens = ScreenExtractor.enrich_screens_with_video_spatial_info(
+					screens_result.screens,
+					frame_analyses
+				)
+				screens_result.screens = enriched_screens
+				logger.info(f"✅ Phase 5.2: Enriched {len(enriched_screens)} screens with spatial information from video frames")
+
+		# Phase 5.3 / Priority 4: Link documentation screens to web UI screens with fuzzy matching
+		documentation_screens = [s for s in screens_result.screens if s.content_type == "documentation"]
+		web_ui_screens = [s for s in screens_result.screens if s.content_type == "web_ui" and s.is_actionable]
+		
+		if documentation_screens and web_ui_screens:
+			logger.info(f"🔗 Phase 5.3 / Priority 4: Linking {len(documentation_screens)} documentation screens to {len(web_ui_screens)} web UI screens")
+			from navigator.knowledge.persist.cross_references import get_cross_reference_manager
+			from difflib import SequenceMatcher
+			cross_ref_manager = get_cross_reference_manager()
+			
+			linked_count = 0
+			for doc_screen in documentation_screens:
+				best_match = None
+				best_similarity = 0.0
+				
+				doc_name_lower = doc_screen.name.lower().strip()
+				
+				for web_screen in web_ui_screens:
+					web_name_lower = web_screen.name.lower().strip()
+					
+					# Priority 4: Enhanced matching with fuzzy similarity
+					# 1. Exact match or substring match (highest priority)
+					if doc_name_lower == web_name_lower:
+						best_match = web_screen
+						best_similarity = 1.0
+						break
+					elif doc_name_lower in web_name_lower or web_name_lower in doc_name_lower:
+						similarity = 0.9
+						if similarity > best_similarity:
+							best_match = web_screen
+							best_similarity = similarity
+					# 2. Word overlap (medium priority)
+					elif any(word in web_name_lower for word in doc_name_lower.split() if len(word) > 3):
+						# Calculate word overlap ratio
+						doc_words = set(doc_name_lower.split())
+						web_words = set(web_name_lower.split())
+						overlap = len(doc_words & web_words) / max(len(doc_words), len(web_words), 1)
+						similarity = 0.5 + (overlap * 0.3)  # 0.5-0.8 range
+						if similarity > best_similarity:
+							best_match = web_screen
+							best_similarity = similarity
+					# 3. Fuzzy string matching (lower priority, threshold 0.6)
+					else:
+						similarity = SequenceMatcher(None, doc_name_lower, web_name_lower).ratio()
+						if similarity >= 0.6 and similarity > best_similarity:
+							best_match = web_screen
+							best_similarity = similarity
+				
+				# Link if we found a good match
+				if best_match and best_similarity >= 0.5:
+					# Link documentation screen to web UI screen
+					doc_screen.metadata = doc_screen.metadata or {}
+					doc_screen.metadata['linked_web_ui_screen_id'] = best_match.screen_id
+					doc_screen.metadata['linking_similarity'] = best_similarity
+					linked_count += 1
+					logger.debug(
+						f"Priority 4: Linked documentation screen '{doc_screen.name}' "
+						f"to web UI screen '{best_match.name}' (similarity: {best_similarity:.2f})"
+					)
+			
+			if linked_count > 0:
+				logger.info(f"✅ Priority 4: Linked {linked_count} documentation screens to web UI screens with fuzzy matching")
 
 		# Persist screens to MongoDB with knowledge_id and job_id
 		if screens_result.screens:

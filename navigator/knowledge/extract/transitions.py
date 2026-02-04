@@ -56,7 +56,13 @@ class TransitionDefinition(BaseModel):
 	effects: list[TransitionEffect] = Field(default_factory=list, description="Transition effects")
 	cost: dict[str, Any] = Field(
 		default_factory=lambda: {"estimated_ms": 2000, "complexity_score": 0.5},
-		description="Cost metrics"
+		description="Cost metrics (estimated_ms updated with actual delay intelligence)"
+	)
+	
+	# Delay Intelligence (captured from actual execution)
+	delay_intelligence: dict[str, Any] | None = Field(
+		None,
+		description="Delay intelligence: average_delay_ms, recommended_wait_time_ms, is_slow, is_fast, variability, confidence"
 	)
 	reliability_score: float = Field(default=0.95, description="Reliability score (0-1)")
 	metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
@@ -145,7 +151,11 @@ class TransitionExtractor:
 		"""
 		self.website_id = website_id
 
-	def extract_transitions(self, content_chunks: list[ContentChunk]) -> TransitionExtractionResult:
+	def extract_transitions(
+		self,
+		content_chunks: list[ContentChunk],
+		existing_screens: list[Any] | None = None
+	) -> TransitionExtractionResult:
 		"""
 		Extract transition definitions from content chunks.
 		
@@ -157,31 +167,54 @@ class TransitionExtractor:
 		"""
 		result = TransitionExtractionResult()
 
+		# Phase 9: Build screen ID lookup for validation
+		existing_screen_ids = set()
+		if existing_screens:
+			for screen in existing_screens:
+				if hasattr(screen, 'screen_id'):
+					existing_screen_ids.add(screen.screen_id)
+				elif isinstance(screen, dict):
+					existing_screen_ids.add(screen.get('screen_id', ''))
+
 		try:
 			logger.info(f"Extracting transitions from {len(content_chunks)} content chunks")
 
 			for chunk in content_chunks:
-				transitions = self._extract_transitions_from_chunk(chunk)
+				transitions = self._extract_transitions_from_chunk(chunk, existing_screen_ids)
 				result.transitions.extend(transitions)
 
 			# Deduplicate transitions
 			result.transitions = self._deduplicate_transitions(result.transitions)
 
-			# Validate extracted transitions
+			# Phase 9: Validate transitions reference existing screens
+			valid_transitions = []
 			for transition in result.transitions:
 				validation_errors = self._validate_transition(transition)
+				
+				# Phase 9: Check if screen IDs exist
+				if existing_screen_ids:
+					if transition.from_screen_id not in existing_screen_ids:
+						validation_errors.append(f"from_screen_id '{transition.from_screen_id}' does not exist")
+					if transition.to_screen_id not in existing_screen_ids:
+						validation_errors.append(f"to_screen_id '{transition.to_screen_id}' does not exist")
+				
 				if validation_errors:
 					result.add_error(
 						"ValidationError",
 						f"Transition '{transition.transition_id}' failed validation",
 						{"transition_id": transition.transition_id, "errors": validation_errors}
 					)
+				else:
+					valid_transitions.append(transition)
+			
+			# Phase 9: Only keep valid transitions
+			result.transitions = valid_transitions
 
 			# Calculate statistics
 			result.calculate_statistics()
 
 			logger.info(
-				f"✅ Extracted {result.statistics['total_transitions']} transitions "
+				f"✅ Extracted {result.statistics['total_transitions']} valid transitions "
 				f"(avg reliability: {result.statistics['avg_reliability']:.2f})"
 			)
 
@@ -191,8 +224,16 @@ class TransitionExtractor:
 
 		return result
 
-	def _extract_transitions_from_chunk(self, chunk: ContentChunk) -> list[TransitionDefinition]:
-		"""Extract transitions from a single content chunk."""
+	def _extract_transitions_from_chunk(
+		self,
+		chunk: ContentChunk,
+		existing_screen_ids: set[str] | None = None
+	) -> list[TransitionDefinition]:
+		"""
+		Extract transitions from a single content chunk.
+		
+		Phase 9: Improved screen ID generation to match existing screens.
+		"""
 		transitions = []
 
 		# Transition patterns: "from X to Y" or "clicking Z navigates to W"
@@ -208,9 +249,16 @@ class TransitionExtractor:
 				source = match.group(1).strip()
 				target = match.group(2).strip()
 
-				# Generate screen IDs
-				source_id = self._normalize_id(source)
-				target_id = self._normalize_id(target)
+				# Phase 9: Generate proper screen IDs (not concatenated event data)
+				# Use the same ID generation logic as ScreenExtractor
+				source_id = self._generate_screen_id_from_name(source)
+				target_id = self._generate_screen_id_from_name(target)
+				
+				# Phase 9: If existing screens provided, try to match to actual screen IDs
+				if existing_screen_ids:
+					# Try to find matching screen ID by name similarity
+					source_id = self._find_matching_screen_id(source, existing_screen_ids) or source_id
+					target_id = self._find_matching_screen_id(target, existing_screen_ids) or target_id
 
 				# Extract context
 				start = max(0, match.start() - 300)
@@ -224,6 +272,35 @@ class TransitionExtractor:
 				transitions.append(transition)
 
 		return transitions
+	
+	def _generate_screen_id_from_name(self, screen_name: str) -> str:
+		"""Phase 9: Generate screen ID from name (same logic as ScreenExtractor)."""
+		# Normalize name
+		normalized = re.sub(r'[^a-zA-Z0-9\s]', '', screen_name.lower())
+		normalized = re.sub(r'\s+', '_', normalized.strip())
+		
+		# Generate hash suffix
+		hash_obj = hashlib.md5(screen_name.encode('utf-8'))
+		hash_suffix = hash_obj.hexdigest()[:8]
+		
+		# Limit length
+		if len(normalized) > 30:
+			normalized = normalized[:30].rstrip('_')
+		
+		return f"{normalized}_{hash_suffix}" if normalized else f"screen_{hash_suffix}"
+	
+	def _find_matching_screen_id(self, screen_name: str, existing_screen_ids: set[str]) -> str | None:
+		"""Phase 9: Find matching screen ID from existing screens by name similarity."""
+		# Simple heuristic: check if any screen ID contains key words from screen name
+		name_words = set(re.findall(r'\w+', screen_name.lower()))
+		
+		for screen_id in existing_screen_ids:
+			screen_id_words = set(re.findall(r'\w+', screen_id.lower()))
+			# If significant overlap, consider it a match
+			if len(name_words & screen_id_words) >= 2:
+				return screen_id
+		
+		return None
 
 	def _create_transition_from_context(
 		self,
@@ -348,6 +425,35 @@ class TransitionExtractor:
 		normalized = re.sub(r'[^\w\s-]', '', normalized)
 		normalized = re.sub(r'[-\s]+', '_', normalized)
 		return normalized
+	
+	def _generate_screen_id_from_name(self, screen_name: str) -> str:
+		"""Phase 9: Generate screen ID from name (same logic as ScreenExtractor)."""
+		# Normalize name
+		normalized = re.sub(r'[^a-zA-Z0-9\s]', '', screen_name.lower())
+		normalized = re.sub(r'\s+', '_', normalized.strip())
+		
+		# Generate hash suffix
+		hash_obj = hashlib.md5(screen_name.encode('utf-8'))
+		hash_suffix = hash_obj.hexdigest()[:8]
+		
+		# Limit length
+		if len(normalized) > 30:
+			normalized = normalized[:30].rstrip('_')
+		
+		return f"{normalized}_{hash_suffix}" if normalized else f"screen_{hash_suffix}"
+	
+	def _find_matching_screen_id(self, screen_name: str, existing_screen_ids: set[str]) -> str | None:
+		"""Phase 9: Find matching screen ID from existing screens by name similarity."""
+		# Simple heuristic: check if any screen ID contains key words from screen name
+		name_words = set(re.findall(r'\w+', screen_name.lower()))
+		
+		for screen_id in existing_screen_ids:
+			screen_id_words = set(re.findall(r'\w+', screen_id.lower()))
+			# If significant overlap, consider it a match
+			if len(name_words & screen_id_words) >= 2:
+				return screen_id
+		
+		return None
 
 	def _deduplicate_transitions(self, transitions: list[TransitionDefinition]) -> list[TransitionDefinition]:
 		"""Deduplicate transitions by transition_id."""

@@ -53,6 +53,19 @@ async def save_screen(
 			upsert=True
 		)
 
+		# Phase 3.1: Link screen to business functions
+		from navigator.knowledge.persist.cross_references import get_cross_reference_manager
+		cross_ref_manager = get_cross_reference_manager()
+
+		if hasattr(screen, 'business_function_ids') and screen.business_function_ids:
+			for bf_id in screen.business_function_ids:
+				await cross_ref_manager.link_entity_to_business_function(
+					'screen',
+					screen.screen_id,
+					bf_id,
+					knowledge_id
+				)
+
 		logger.info(f"Saved screen: screen_id={screen.screen_id}, name={screen.name}, knowledge_id={knowledge_id}, job_id={job_id}")
 		return True
 

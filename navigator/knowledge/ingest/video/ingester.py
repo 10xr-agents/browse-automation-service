@@ -264,6 +264,7 @@ class VideoIngester:
 			if frame_analyses:
 				# Create frame analysis chunks
 				for idx, analysis in enumerate(frame_analyses):
+					# Phase 5.2: Store raw frame analysis in metadata for spatial extraction
 					frame_chunk = ContentChunk(
 						chunk_id=f"{ingestion_id}_frame_{idx}",
 						content=format_frame_analysis(analysis),
@@ -271,6 +272,12 @@ class VideoIngester:
 						token_count=int(len(str(analysis).split()) * 1.3),  # Convert float to int
 						chunk_type="video_frame_analysis",
 						section_title=f"Frame Analysis {idx + 1}",
+						# Phase 5.2: Store raw frame analysis data in metadata for spatial extraction
+						metadata={
+							'frame_analysis': analysis,  # Store raw analysis dict for spatial extraction
+							'timestamp': analysis.get('timestamp', 0),
+							'screen_state': analysis.get('screen_state', 'Unknown'),
+						}
 					)
 					result.content_chunks.append(frame_chunk)
 

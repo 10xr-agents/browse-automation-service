@@ -68,6 +68,9 @@ from navigator.schemas.temporal import (
 	ExtractUserFlowsResult,
 	ExtractWorkflowsInput,
 	ExtractWorkflowsResult,
+	# Activity I/O - Post-Extraction Entity Linking (Priority 2)
+	LinkEntitiesInput,
+	LinkEntitiesResult,
 	FilterFramesInput,
 	FilterFramesResult,
 	# Activity I/O - Ingestion
@@ -128,6 +131,8 @@ __all__ = [
 	'ExtractWorkflowsResult',
 	'ExtractUserFlowsInput',
 	'ExtractUserFlowsResult',
+	'LinkEntitiesInput',
+	'LinkEntitiesResult',
 	'BuildGraphInput',
 	'BuildGraphResult',
 	'VerifyExtractionInput',

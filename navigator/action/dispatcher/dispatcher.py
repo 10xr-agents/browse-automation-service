@@ -4,6 +4,7 @@ Main ActionDispatcher class.
 Routes action commands to appropriate handlers and manages browser context.
 """
 
+import asyncio
 import logging
 
 from browser_use import BrowserSession
@@ -223,7 +224,7 @@ class ActionDispatcher:
 	async def _execute_form_action(self, action_type: str, action: ActionCommand) -> ActionResult:
 		"""Execute form actions (fill_form, select_multiple, submit_form, reset_form)."""
 		from browser_use.browser.events import SendKeysEvent, TypeTextEvent
-		from navigator.action.dispatcher.utils import execute_javascript, get_element_by_index
+		from navigator.action.dispatcher.utils import execute_javascript, get_element_by_index, wait_for_transition
 
 		params = action.params
 
@@ -259,10 +260,74 @@ class ActionDispatcher:
 			# Submit form (press Enter or find submit button)
 			if 'index' in params:
 				index = params['index']
+				# Get initial URL before submission
+				try:
+					initial_url = await self.browser_session.get_current_page_url()
+				except Exception:
+					initial_url = None
+				
 				# Use send_keys with Enter
 				event = self.browser_session.event_bus.dispatch(SendKeysEvent(keys='Enter'))
 				await event
 				await event.event_result(raise_if_any=False, raise_if_none=False)
+				
+				# Wait for form submission to complete (navigation, DOM updates, network requests)
+				try:
+					from navigator.action.dispatcher.utils import wait_for_transition
+					transition_result = await wait_for_transition(
+						browser_session=self.browser_session,
+						initial_url=initial_url,
+						max_wait_time=8.0,  # Form submissions can take time
+						check_interval=0.3,
+						wait_for_dom_stability=True,
+						wait_for_network_idle=True,
+					)
+					if transition_result['url_changed']:
+						logger.debug(f"✅ Form submission caused navigation: {initial_url} → {transition_result['final_url']}")
+					else:
+						logger.debug(f"✅ Form submission complete (no URL change, likely SPA update)")
+					
+					# Record delay for intelligence tracking
+					from navigator.knowledge.delay_tracking import get_delay_tracker
+					delay_tracker = get_delay_tracker()
+					action_id = params.get('action_id') or f"submit_form_{index}"
+					final_url = transition_result.get('final_url', initial_url)
+					
+					delay_tracker.record_delay(
+						entity_id=action_id,
+						entity_type='action',
+						delay_ms=transition_result.get('wait_time_ms', transition_result['wait_time'] * 1000),
+						url_changed=transition_result.get('url_changed', False),
+						dom_stable=transition_result.get('dom_stable', False),
+						network_idle=transition_result.get('network_idle', False),
+						context={
+							'action_type': 'submit_form',
+							'form_index': index,
+							'initial_url': initial_url,
+							'final_url': final_url,
+						},
+					)
+					
+					# Also track as transition if URL changed
+					if transition_result.get('url_changed', False) and initial_url and initial_url != final_url:
+						delay_tracker.record_transition_delay(
+							from_url=initial_url,
+							to_url=final_url,
+							delay_ms=transition_result.get('wait_time_ms', transition_result['wait_time'] * 1000),
+							url_changed=True,
+							dom_stable=transition_result.get('dom_stable', False),
+							network_idle=transition_result.get('network_idle', False),
+							context={
+								'action_type': 'submit_form',
+								'action_id': action_id,
+								'form_index': index,
+							},
+						)
+				except Exception as e:
+					# Don't fail form submission if transition waiting fails
+					logger.debug(f"Error waiting for form submission transition: {e}")
+					await asyncio.sleep(1.0)  # Fallback
+				
 				return ActionResult(success=True, data={})
 			else:
 				return ActionResult(success=False, error='Submit_form action requires "index" parameter')

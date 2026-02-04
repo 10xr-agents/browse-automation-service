@@ -194,6 +194,7 @@ async def assemble_video_ingestion_activity(
 			# Format frame analyses into text chunks
 			for idx, frame_analysis in enumerate(all_frame_analyses):
 				formatted_text = format_frame_analysis(frame_analysis)
+				# Phase 5.2: Store raw frame analysis in metadata for spatial extraction
 				frame_chunk = ContentChunk(
 					chunk_id=f"{input.ingestion_id}_frame_{idx}",
 					content=formatted_text,
@@ -201,6 +202,12 @@ async def assemble_video_ingestion_activity(
 					token_count=int(len(formatted_text.split()) * 1.3),
 					chunk_type="video_frame_analysis",
 					section_title=f"Frame Analysis {idx + 1}",
+					# Phase 5.2: Store raw frame analysis data in metadata for spatial extraction
+					metadata={
+						'frame_analysis': frame_analysis,  # Store raw analysis dict for spatial extraction
+						'timestamp': frame_analysis.get('timestamp', 0),
+						'screen_state': frame_analysis.get('screen_state', 'Unknown'),
+					}
 				)
 				result.content_chunks.append(frame_chunk)
 

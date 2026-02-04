@@ -30,6 +30,8 @@ with workflow.unsafe.imports_passed_through():
 		KnowledgeExtractionInputV2,
 		KnowledgeExtractionProgressV2,
 		KnowledgeExtractionResultV2,
+		LinkEntitiesInput,
+		LinkEntitiesResult,
 		WorkflowPhase,
 	)
 	from navigator.schemas.temporal import DeleteKnowledgeInput, DeleteKnowledgeResult
@@ -42,6 +44,7 @@ with workflow.unsafe.imports_passed_through():
 		extract_transitions_activity,
 		extract_user_flows_activity,
 		extract_workflows_activity,
+		link_entities_activity,
 	)
 
 
@@ -322,6 +325,32 @@ async def execute_extraction_phase(
 	extraction_summary += ". Knowledge merged and deduplicated across all sources."
 
 	workflow.logger.info(extraction_summary)
+
+	# ================================================================
+	# Phase 2.5: Post-Extraction Entity Linking (Priority 2)
+	# ================================================================
+	
+	progress.current_activity = "link_entities"
+	workflow.logger.info("🔗 Phase 2.5: Linking entities...")
+	
+	link_result: LinkEntitiesResult = await workflow.execute_activity(
+		link_entities_activity,
+		LinkEntitiesInput(
+			knowledge_id=input.knowledge_id,
+			job_id=input.job_id,
+		),
+		**activity_options,
+	)
+	
+	workflow.logger.info(
+		f"✅ Entity linking complete: "
+		f"{link_result.tasks_linked} tasks, {link_result.actions_linked} actions, "
+		f"{link_result.business_functions_linked} business functions, "
+		f"{link_result.workflows_linked} workflows, {link_result.transitions_linked} transitions linked"
+	)
+	
+	if link_result.errors:
+		workflow.logger.warning(f"⚠️ Entity linking had {len(link_result.errors)} errors: {link_result.errors}")
 
 	# Return result objects for use in subsequent phases
 	return (screens_result, tasks_result, actions_result, transitions_result)

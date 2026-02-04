@@ -9,7 +9,7 @@ import logging
 from browser_use.browser.events import ClickCoordinateEvent, ClickElementEvent
 from browser_use.browser.views import BrowserError
 from navigator.action.command import ActionCommand, ActionResult, ClickActionCommand
-from navigator.action.dispatcher.utils import execute_javascript, get_element_by_index
+from navigator.action.dispatcher.utils import execute_javascript, get_element_by_index, wait_for_transition
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,76 @@ async def execute_click(browser_session, action: ClickActionCommand, last_cursor
 				new_cursor_x,
 				new_cursor_y,
 			)
+
+		# Wait for transition after click (handles navigation, DOM updates, network requests)
+		# Only wait if click was successful (no validation_error)
+		has_error = result and isinstance(result, dict) and result.get('validation_error')
+		if not has_error:
+			try:
+				initial_url = await browser_session.get_current_page_url()
+				transition_result = await wait_for_transition(
+					browser_session=browser_session,
+					initial_url=initial_url,
+					max_wait_time=5.0,  # Wait up to 5 seconds for transitions
+					check_interval=0.3,
+					wait_for_dom_stability=True,
+					wait_for_network_idle=True,
+				)
+				if transition_result['url_changed']:
+					logger.debug(f"✅ Click caused navigation: {initial_url} → {transition_result['final_url']}")
+				
+				# Record delay for intelligence tracking
+				from navigator.knowledge.delay_tracking import get_delay_tracker
+				delay_tracker = get_delay_tracker()
+				# Generate action_id based on click type
+				if 'coordinate_x' in params and 'coordinate_y' in params:
+					action_id = params.get('action_id') or f"click_coordinate_{params['coordinate_x']}_{params['coordinate_y']}"
+					context = {
+						'action_type': 'click',
+						'coordinate_x': params['coordinate_x'],
+						'coordinate_y': params['coordinate_y'],
+						'initial_url': initial_url,
+						'final_url': transition_result.get('final_url'),
+					}
+				else:
+					action_id = params.get('action_id') or f"click_index_{params.get('index')}"
+					context = {
+						'action_type': 'click',
+						'element_index': params.get('index'),
+						'initial_url': initial_url,
+						'final_url': transition_result.get('final_url'),
+					}
+				
+				delay_tracker.record_delay(
+					entity_id=action_id,
+					entity_type='action',
+					delay_ms=transition_result.get('wait_time_ms', transition_result['wait_time'] * 1000),
+					url_changed=transition_result.get('url_changed', False),
+					dom_stable=transition_result.get('dom_stable', False),
+					network_idle=transition_result.get('network_idle', False),
+					context=context,
+				)
+				
+				# Also track as transition if URL changed
+				if transition_result.get('url_changed', False):
+					final_url = transition_result.get('final_url', initial_url)
+					if initial_url != final_url:
+						delay_tracker.record_transition_delay(
+							from_url=initial_url,
+							to_url=final_url,
+							delay_ms=transition_result.get('wait_time_ms', transition_result['wait_time'] * 1000),
+							url_changed=True,
+							dom_stable=transition_result.get('dom_stable', False),
+							network_idle=transition_result.get('network_idle', False),
+							context={
+								'action_type': 'click',
+								'action_id': action_id,
+								**context,
+							},
+						)
+			except Exception as e:
+				# Don't fail the action if transition waiting fails
+				logger.debug(f"Error waiting for transition after click: {e}")
 
 		return (
 			ActionResult(
@@ -107,6 +177,76 @@ async def execute_click(browser_session, action: ClickActionCommand, last_cursor
 				new_cursor_x,
 				new_cursor_y,
 			)
+
+		# Wait for transition after click (handles navigation, DOM updates, network requests)
+		# Only wait if click was successful (no validation_error)
+		has_error = result and isinstance(result, dict) and result.get('validation_error')
+		if not has_error:
+			try:
+				initial_url = await browser_session.get_current_page_url()
+				transition_result = await wait_for_transition(
+					browser_session=browser_session,
+					initial_url=initial_url,
+					max_wait_time=5.0,  # Wait up to 5 seconds for transitions
+					check_interval=0.3,
+					wait_for_dom_stability=True,
+					wait_for_network_idle=True,
+				)
+				if transition_result['url_changed']:
+					logger.debug(f"✅ Click caused navigation: {initial_url} → {transition_result['final_url']}")
+				
+				# Record delay for intelligence tracking
+				from navigator.knowledge.delay_tracking import get_delay_tracker
+				delay_tracker = get_delay_tracker()
+				# Generate action_id based on click type
+				if 'coordinate_x' in params and 'coordinate_y' in params:
+					action_id = params.get('action_id') or f"click_coordinate_{params['coordinate_x']}_{params['coordinate_y']}"
+					context = {
+						'action_type': 'click',
+						'coordinate_x': params['coordinate_x'],
+						'coordinate_y': params['coordinate_y'],
+						'initial_url': initial_url,
+						'final_url': transition_result.get('final_url'),
+					}
+				else:
+					action_id = params.get('action_id') or f"click_index_{params.get('index')}"
+					context = {
+						'action_type': 'click',
+						'element_index': params.get('index'),
+						'initial_url': initial_url,
+						'final_url': transition_result.get('final_url'),
+					}
+				
+				delay_tracker.record_delay(
+					entity_id=action_id,
+					entity_type='action',
+					delay_ms=transition_result.get('wait_time_ms', transition_result['wait_time'] * 1000),
+					url_changed=transition_result.get('url_changed', False),
+					dom_stable=transition_result.get('dom_stable', False),
+					network_idle=transition_result.get('network_idle', False),
+					context=context,
+				)
+				
+				# Also track as transition if URL changed
+				if transition_result.get('url_changed', False):
+					final_url = transition_result.get('final_url', initial_url)
+					if initial_url != final_url:
+						delay_tracker.record_transition_delay(
+							from_url=initial_url,
+							to_url=final_url,
+							delay_ms=transition_result.get('wait_time_ms', transition_result['wait_time'] * 1000),
+							url_changed=True,
+							dom_stable=transition_result.get('dom_stable', False),
+							network_idle=transition_result.get('network_idle', False),
+							context={
+								'action_type': 'click',
+								'action_id': action_id,
+								**context,
+							},
+						)
+			except Exception as e:
+				# Don't fail the action if transition waiting fails
+				logger.debug(f"Error waiting for transition after click: {e}")
 
 		return (
 			ActionResult(

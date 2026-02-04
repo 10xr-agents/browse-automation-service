@@ -47,6 +47,11 @@ from navigator.knowledge.persist.deduplication import (
 	compute_content_hash,
 	update_ingestion_metadata,
 )
+from navigator.knowledge.persist.knowledge_deduplication import (
+	DeduplicationResult,
+	KnowledgeDeduplicator,
+	deduplicate_knowledge,
+)
 from navigator.knowledge.persist.documents import (
 	get_action,
 	get_business_function,
@@ -126,6 +131,10 @@ __all__ = [
 	'check_already_ingested',
 	'compute_content_hash',
 	'update_ingestion_metadata',
+	# Knowledge deduplication (Phase 4.3)
+	'KnowledgeDeduplicator',
+	'DeduplicationResult',
+	'deduplicate_knowledge',
 	# Document storage
 	'save_screen',
 	'save_screens',

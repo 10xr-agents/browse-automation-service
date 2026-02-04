@@ -559,12 +559,18 @@ async def get_screen_context(
 			for action_id in screen.action_ids:
 				action = await get_action(action_id)
 				if action:
-					available_actions.append({
+					action_dict = {
 						'action_id': action.action_id,
 						'name': action.name,
 						'action_type': action.action_type,
 						'category': action.category
-					})
+					}
+					# Phase 1.4: Include browser-use action mapping if available
+					if hasattr(action, 'browser_use_action') and action.browser_use_action:
+						action_dict['browser_use_action'] = action.browser_use_action
+					if hasattr(action, 'confidence_score') and action.confidence_score is not None:
+						action_dict['confidence_score'] = action.confidence_score
+					available_actions.append(action_dict)
 
 		# Get available tasks
 		available_tasks = []

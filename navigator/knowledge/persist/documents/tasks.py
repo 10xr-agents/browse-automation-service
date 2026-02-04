@@ -84,6 +84,16 @@ async def save_task(
 						upsert=False
 					)
 
+		# Phase 3.1: Link task to business functions
+		if hasattr(task, 'business_function_ids') and task.business_function_ids:
+			for bf_id in task.business_function_ids:
+				await cross_ref_manager.link_entity_to_business_function(
+					'task',
+					task.task_id,
+					bf_id,
+					knowledge_id
+				)
+
 		logger.info(f"Saved task: task_id={task.task_id}, name={task.name}, knowledge_id={knowledge_id}, job_id={job_id}")
 		return True
 

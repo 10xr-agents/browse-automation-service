@@ -17,6 +17,7 @@ from navigator.knowledge.persist.collections import (
 	get_screens_collection,
 	get_tasks_collection,
 	get_transitions_collection,
+	get_workflows_collection,
 )
 
 logger = logging.getLogger(__name__)
@@ -366,6 +367,118 @@ class CrossReferenceManager:
 
 		except Exception as e:
 			logger.error(f"Failed to link transition to screens: {e}")
+			return False
+
+	async def link_entity_to_business_function(
+		self,
+		entity_type: str,
+		entity_id: str,
+		business_function_id: str,
+		knowledge_id: str | None = None
+	) -> bool:
+		"""
+		Link an entity (screen, action, task, user_flow, workflow) to a business function (bidirectional).
+		
+		Phase 3.1: Complete Business Function Mapping
+		
+		Updates:
+		- Entity.business_function_ids (or related_business_functions)
+		- BusinessFunction.related_<entity_type>s
+		
+		Args:
+			entity_type: Type of entity ('screen', 'action', 'task', 'user_flow', 'workflow')
+			entity_id: Entity ID
+			business_function_id: Business function ID
+			knowledge_id: Optional knowledge ID for filtering
+		
+		Returns:
+			True if both links updated successfully
+		"""
+		try:
+			bf_collection = await get_business_functions_collection()
+			if bf_collection is None:
+				return False
+
+			# Map entity type to collection and field names
+			entity_map = {
+				'screen': {
+					'collection_getter': get_screens_collection,
+					'entity_field': 'business_function_ids',
+					'bf_field': 'related_screens'
+				},
+				'action': {
+					'collection_getter': get_actions_collection,
+					'entity_field': 'business_function_ids',
+					'bf_field': 'related_actions'
+				},
+				'task': {
+					'collection_getter': get_tasks_collection,
+					'entity_field': 'business_function_ids',
+					'bf_field': 'related_tasks'
+				},
+				'user_flow': {
+					'collection_getter': None,  # User flows stored separately
+					'entity_field': 'related_business_functions',
+					'bf_field': 'related_user_flows'
+				},
+				'workflow': {
+					'collection_getter': None,  # Workflows stored separately
+					'entity_field': 'business_function_id',  # Single ID, not list
+					'bf_field': 'related_workflows'
+				}
+			}
+
+			entity_config = entity_map.get(entity_type)
+			if not entity_config:
+				logger.warning(f"Unknown entity type for business function linking: {entity_type}")
+				return False
+
+			# Update entity: add business function
+			if entity_config['collection_getter']:
+				entity_collection = await entity_config['collection_getter']()
+				if entity_collection:
+					entity_query = {f"{entity_type}_id": entity_id}
+					if knowledge_id:
+						entity_query['knowledge_id'] = knowledge_id
+
+					# Handle single ID vs list
+					if entity_config['entity_field'] == 'business_function_id':
+						# Single ID field (workflows)
+						await entity_collection.update_one(
+							entity_query,
+							{'$set': {entity_config['entity_field']: business_function_id}},
+							upsert=False
+						)
+					else:
+						# List field (screens, actions, tasks)
+						await entity_collection.update_one(
+							entity_query,
+							{'$addToSet': {entity_config['entity_field']: business_function_id}},
+							upsert=False
+						)
+			elif entity_type == 'user_flow':
+				# User flows stored separately - handled in save_user_flow
+				# This method is called from save_user_flow, so linking is already done
+				pass
+
+			# Update business function: add entity
+			bf_query = {'business_function_id': business_function_id}
+			if knowledge_id:
+				bf_query['knowledge_id'] = knowledge_id
+
+			await bf_collection.update_one(
+				bf_query,
+				{'$addToSet': {entity_config['bf_field']: entity_id}},
+				upsert=False
+			)
+
+			logger.debug(
+				f"Linked {entity_type}_id={entity_id} to business_function_id={business_function_id}"
+			)
+			return True
+
+		except Exception as e:
+			logger.error(f"Failed to link {entity_type} to business function: {e}")
 			return False
 
 	async def update_screen_references_from_entity(

@@ -20,10 +20,11 @@ from navigator.knowledge.extract.browser_use_mapping import (
 	translate_to_browser_use,
 )
 from navigator.knowledge.extract.business_functions import BusinessFunctionExtractor
+from navigator.knowledge.extract.business_features import BusinessFeatureExtractor
 from navigator.knowledge.extract.entities import EntityExtractor
 from navigator.knowledge.extract.iterators import IteratorExtractor
 from navigator.knowledge.extract.resolver import ReferenceResolver
-from navigator.knowledge.extract.screens import ScreenExtractor
+from navigator.knowledge.extract.screens import ScreenExtractor, ScreenRegion
 from navigator.knowledge.extract.tasks import TaskExtractor
 from navigator.knowledge.extract.transitions import TransitionExtractor
 from navigator.knowledge.extract.workflows import WorkflowExtractor
@@ -37,7 +38,9 @@ __all__ = [
 	'EntityExtractor',
 	'ReferenceResolver',
 	'BusinessFunctionExtractor',
+	'BusinessFeatureExtractor',  # Phase 8
 	'WorkflowExtractor',
+	'ScreenRegion',  # Phase 8
 	# Phase 2: Browser-Use Mapping
 	'BrowserUseAction',
 	'ActionTranslator',

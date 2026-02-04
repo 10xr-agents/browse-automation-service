@@ -28,6 +28,7 @@ from navigator.temporal.activities import (
 	extract_workflows_activity,
 	ingest_source_activity,
 	init_activity_dependencies,
+	link_entities_activity,
 	verify_extraction_activity,
 )
 from navigator.temporal.activities_extraction_video import (
@@ -160,6 +161,7 @@ class TemporalWorkerService:
 				extract_business_functions_activity,  # Extract business functions (LLM-based)
 				extract_workflows_activity,  # Extract operational workflows (LLM-based)
 				extract_user_flows_activity,  # Extract user flows (Phase 4: synthesis from all entities)
+				link_entities_activity,  # Priority 2: Post-extraction entity linking
 
 				# ========================================================================
 				# Phase 4: Graph Construction Activities
